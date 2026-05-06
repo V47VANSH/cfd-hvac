@@ -92,12 +92,25 @@ function buildSupplyTempTable(s: Scene, ac: typeof acPositions): void {
     };
   });
 }
-function acWithSupply(): { x: number; z: number; supply_temp_C: number; kw: number; mounting_height_m?: number }[] {
+function acWithSupply(): {
+  x: number;
+  z: number;
+  wall: "S" | "N" | "E" | "W";
+  supply_temp_C: number;
+  kw: number;
+  mounting_height_m?: number;
+  throw_distance_m?: number;
+  airflow_angle_deg?: number;
+  vertical_angle_deg?: number;
+}[] {
   return acPositions.map((a, i) => ({
-    x: a.x, z: a.z,
+    x: a.x, z: a.z, wall: a.wall,
     supply_temp_C: acTunables[i]?.supply_temp_C ?? 14,
     kw:            acTunables[i]?.kw            ?? 1.5,
     mounting_height_m: acTunables[i]?.mounting_height_m,
+    throw_distance_m: acTunables[i]?.throw_m,
+    airflow_angle_deg: acTunables[i]?.yaw_deg,
+    vertical_angle_deg: acTunables[i]?.pitch_deg,
   }));
 }
 

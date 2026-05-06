@@ -63,7 +63,12 @@ export function buildParticles(): Particles {
   trails.visible = false;
   group.add(trails);
 
-  function spawnAt(p: number, room: Geometry, ac: { x: number; z: number; wall: "S"|"N"|"E"|"W"; mounting_height_m?: number }[]) {
+  function spawnAt(
+    p: number,
+    room: Geometry,
+    ac: { x: number; z: number; wall: "S"|"N"|"E"|"W"; mounting_height_m?: number }[],
+    snap?: { Vx: Float32Array; Vy: Float32Array; Vz: Float32Array; wall?: Uint8Array },
+  ) {
     const pi = p * 3;
     if (ac.length) {
       const a = ac[Math.floor(Math.random() * ac.length)];
@@ -74,13 +79,25 @@ export function buildParticles(): Particles {
       // spawns particles 2.5 m above the actual AC, totally missing
       // the throw cone — that's why the throw "stayed near the AC".
       const mountY = a.mounting_height_m ?? room.H * 0.88;
-      const n = inwardNormal(a.wall);
-      const t = tangent(a.wall);
-      const across = (Math.random() - 0.5) * 0.72;
-      const forward = 0.10 + Math.random() * 0.28;
-      pPos[pi]     = a.x + n.x * forward + t.x * across;
-      pPos[pi + 1] = mountY + (Math.random() - 0.5) * 0.30;
-      pPos[pi + 2] = a.z + n.z * forward + t.z * across;
+      const seed = chooseACSpawn(room, a, mountY, snap);
+      pPos[pi]     = seed.x;
+      pPos[pi + 1] = seed.y;
+      pPos[pi + 2] = seed.z;
+    } else if (snap?.wall) {
+      const k = randomFluidCell(snap.wall);
+      if (k !== null) {
+        const dx = room.L / NX, dy = room.H / NY, dz = room.W / NZ;
+        const ix = k % NX;
+        const iy = Math.floor(k / NX) % NY;
+        const iz = Math.floor(k / (NX * NY));
+        pPos[pi]     = (ix + 0.5) * dx - room.L / 2;
+        pPos[pi + 1] = (iy + 0.5) * dy;
+        pPos[pi + 2] = (iz + 0.5) * dz - room.W / 2;
+      } else {
+        pPos[pi]     = (Math.random() - 0.5) * room.L * 0.85;
+        pPos[pi + 1] = Math.random() * room.H;
+        pPos[pi + 2] = (Math.random() - 0.5) * room.W * 0.85;
+      }
     } else {
       pPos[pi]     = (Math.random() - 0.5) * room.L * 0.85;
       pPos[pi + 1] = Math.random() * room.H;
@@ -122,6 +139,10 @@ export function buildParticles(): Particles {
       const pi = p * 3;
       const ti = p * 6;
       let x = pPos[pi], y = pPos[pi + 1], z = pPos[pi + 2];
+      if (wallMask && !isFluidAt(wallMask, room, x, y, z)) {
+        spawnAt(p, room, ac, snap);
+        continue;
+      }
       const vx = sampleField(snap.Vx, room, x, y, z);
       const vy = sampleField(snap.Vy, room, x, y, z);
       const vz = sampleField(snap.Vz, room, x, y, z);
@@ -140,7 +161,7 @@ export function buildParticles(): Particles {
         z < -W/2 + 0.06 || z > W/2 - 0.06 ||
         age[p] > 7.5 + (p % 37) * 0.08
       ) {
-        spawnAt(p, room, ac);
+        spawnAt(p, room, ac, snap);
         continue;
       }
       // Wall-mask check: respawn if particle wandered into a solid cell
@@ -153,7 +174,7 @@ export function buildParticles(): Particles {
           // Try respawning in a random fluid cell inside the L-shape
           // by re-spawning at an AC location (most likely fluid). Fall
           // back to the bbox-random spawn if no AC.
-          spawnAt(p, room, ac);
+          spawnAt(p, room, ac, snap);
           continue;
         }
       }
@@ -165,7 +186,7 @@ export function buildParticles(): Particles {
           Math.abs(x - ob.x) < ob.W / 2 + 0.05 &&
           Math.abs(z - ob.z) < (ob.D || ob.W) / 2 + 0.05 &&
           y < hy + 0.05 && y > (ob.Yoff || 0) - 0.05
-        ) { spawnAt(p, room, ac); hit = true; break; }
+        ) { spawnAt(p, room, ac, snap); hit = true; break; }
       }
       if (hit) continue;
 
@@ -233,8 +254,71 @@ function sampleField(field: Float32Array, room: Geometry, x: number, y: number, 
   return c0 * (1 - tz) + c1 * tz;
 }
 
+function chooseACSpawn(
+  room: Geometry,
+  ac: { x: number; z: number; wall: "S"|"N"|"E"|"W"; mounting_height_m?: number },
+  mountY: number,
+  snap?: { Vx: Float32Array; Vy: Float32Array; Vz: Float32Array; wall?: Uint8Array },
+): { x: number; y: number; z: number } {
+  const n = inwardNormal(ac.wall);
+  const t = tangent(ac.wall);
+  const dirs = [
+    n,
+    { x: -n.x, z: -n.z },
+    t,
+    { x: -t.x, z: -t.z },
+  ];
+  let best: { x: number; y: number; z: number; score: number } | null = null;
+  for (let d = 0; d < dirs.length; d++) {
+    const dir = dirs[d];
+    const side = d < 2 ? t : n;
+    for (let tries = 0; tries < 8; tries++) {
+      const across = (Math.random() - 0.5) * 0.72;
+      const forward = 0.10 + Math.random() * 0.34;
+      const x = ac.x + dir.x * forward + side.x * across;
+      const y = clamp(mountY + (Math.random() - 0.5) * 0.30, 0.05, room.H - 0.05);
+      const z = ac.z + dir.z * forward + side.z * across;
+      if (snap?.wall && !isFluidAt(snap.wall, room, x, y, z)) continue;
+      const vx = snap ? sampleField(snap.Vx, room, x, y, z) : 0;
+      const vy = snap ? sampleField(snap.Vy, room, x, y, z) : 0;
+      const vz = snap ? sampleField(snap.Vz, room, x, y, z) : 0;
+      const score = Math.hypot(vx, vy, vz) + (d === 0 ? 0.08 : 0);
+      if (!best || score > best.score) best = { x, y, z, score };
+    }
+  }
+  if (best) return best;
+  const across = (Math.random() - 0.5) * 0.72;
+  const forward = 0.10 + Math.random() * 0.28;
+  return {
+    x: ac.x + n.x * forward + t.x * across,
+    y: clamp(mountY + (Math.random() - 0.5) * 0.30, 0.05, room.H - 0.05),
+    z: ac.z + n.z * forward + t.z * across,
+  };
+}
+
+function isFluidAt(wall: Uint8Array, room: Geometry, x: number, y: number, z: number): boolean {
+  const dx = room.L / NX, dy = room.H / NY, dz = room.W / NZ;
+  const ix = Math.max(0, Math.min(NX - 1, Math.floor((x + room.L / 2) / dx)));
+  const iy = Math.max(0, Math.min(NY - 1, Math.floor(y / dy)));
+  const iz = Math.max(0, Math.min(NZ - 1, Math.floor((z + room.W / 2) / dz)));
+  return wall[K(ix, iy, iz)] !== 1;
+}
+
+function randomFluidCell(wall: Uint8Array): number | null {
+  for (let i = 0; i < 96; i++) {
+    const k = Math.floor(Math.random() * wall.length);
+    if (wall[k] !== 1) return k;
+  }
+  for (let k = 0; k < wall.length; k++) if (wall[k] !== 1) return k;
+  return null;
+}
+
 function clamp01(v: number): number {
   return v < 0 ? 0 : v > 1 ? 1 : v;
+}
+
+function clamp(v: number, lo: number, hi: number): number {
+  return v < lo ? lo : v > hi ? hi : v;
 }
 
 function inwardNormal(wall: "S"|"N"|"E"|"W"): { x: number; z: number } {

@@ -144,28 +144,6 @@ export function injectACJetsMAC(
     else                                    patchArea = (2 * halfPatchH * dz) * (2 * halfPatchV * dy);
     const targetSpeed = Math.min(8, Math.max(2, flowM3s / Math.max(0.02, patchArea)));
 
-    // Wall-normal heading
-    let nx = 0, nz = 0;
-    if      (ac.wall === "S") nz =  1;
-    else if (ac.wall === "N") nz = -1;
-    else if (ac.wall === "W") nx =  1;
-    else                      nx = -1;
-    // Yaw rotation about Y for off-axis aim
-    const yawR = ((ac.airflowAngleDeg ?? 0) * Math.PI) / 180;
-    const cy = Math.cos(yawR), sy = Math.sin(yawR);
-    const horizX = nx * cy - nz * sy;
-    const horizZ = nx * sy + nz * cy;
-    // Pitch (vertical) rotation — keeps horizontal magnitude as cos(pitch)
-    const pitchR = ((ac.verticalAngleDeg ?? -5) * Math.PI) / 180;
-    const cp = Math.cos(pitchR), sp = Math.sin(pitchR);
-    const jx = horizX * cp;
-    const jz = horizZ * cp;
-    const jy = sp;     // negative pitch ⇒ downward
-
-    // Normalise so |j| = 1
-    const jmag = Math.sqrt(jx * jx + jy * jy + jz * jz);
-    const Jx = jx / jmag, Jy = jy / jmag, Jz = jz / jmag;
-
     // ── Piece (1): Inlet patch — a real Dirichlet BC on faces ──
     //
     // For a wall AC, the patch sits one cell inside the wall (so it's on
@@ -173,8 +151,10 @@ export function injectACJetsMAC(
     // velocity at those interior faces is held at `target * J` each
     // substep by the worker tick (see below).
     const mountY = ac.mountingHeightM ?? H * 0.88;
-    const cIY = Math.round(mountY / dy);
-    const seed = findFluidJetSeed(f, room, ac.x, mountY, ac.z, Jx, Jz);
+    const jet = resolveFluidJet(f, room, ac.x, mountY, ac.z, ac.wall, ac.airflowAngleDeg, ac.verticalAngleDeg);
+    if (!jet) continue;
+    const { seed, Jx, Jy, Jz } = jet;
+    const cIY = seed.iy;
 
     const ihCenter = ac.wall === "S" || ac.wall === "N" ? seed.ix : seed.iz;
     const ihMin = Math.max(1, ihCenter - halfPatchH);
@@ -225,9 +205,9 @@ export function injectACJetsMAC(
     // off-target before the mixing zone develops.
     const throwM = ac.throwDistance ?? 4;
     const decay = 0.75 / Math.max(0.8, throwM);
-    const ax = ac.x;
-    const ay = ac.mountingHeightM ?? H * 0.88;
-    const az = ac.z;
+    const ax = (seed.ix + 0.5) * dx - L / 2;
+    const ay = (seed.iy + 0.5) * dy;
+    const az = (seed.iz + 0.5) * dz - W / 2;
     const assistMag = 0.9 * targetSpeed;
 
     for (let iz = 0; iz < NZ; iz++)
@@ -290,6 +270,95 @@ function jetGaussian(
     * (0.35 + 0.65 * throwFade);
 }
 
+function jetDirection(
+  wall: "S" | "N" | "E" | "W",
+  yawDeg = 0,
+  pitchDeg = -5,
+): { Jx: number; Jy: number; Jz: number } {
+  let nx = 0, nz = 0;
+  if      (wall === "S") nz =  1;
+  else if (wall === "N") nz = -1;
+  else if (wall === "W") nx =  1;
+  else                   nx = -1;
+
+  const yawR = (yawDeg * Math.PI) / 180;
+  const cy = Math.cos(yawR), sy = Math.sin(yawR);
+  const horizX = nx * cy - nz * sy;
+  const horizZ = nx * sy + nz * cy;
+
+  const pitchR = (pitchDeg * Math.PI) / 180;
+  const cp = Math.cos(pitchR), sp = Math.sin(pitchR);
+  const jx = horizX * cp;
+  const jy = sp;       // negative pitch => downward
+  const jz = horizZ * cp;
+  const mag = Math.hypot(jx, jy, jz) || 1;
+  return { Jx: jx / mag, Jy: jy / mag, Jz: jz / mag };
+}
+
+interface JetSeed {
+  ix: number;
+  iy: number;
+  iz: number;
+  found: boolean;
+}
+
+function resolveFluidJet(
+  f: MACFields,
+  room: RoomDims,
+  acX: number,
+  mountY: number,
+  acZ: number,
+  wall: "S" | "N" | "E" | "W",
+  yawDeg?: number,
+  pitchDeg?: number,
+): { seed: JetSeed; Jx: number; Jy: number; Jz: number } | null {
+  const nominal = jetDirection(wall, yawDeg, pitchDeg);
+  const candidates = [
+    { ...nominal, bias: 0.35 },
+    { Jx: -nominal.Jx, Jy: nominal.Jy, Jz: -nominal.Jz, bias: 0 },
+  ];
+  let best: { seed: JetSeed; Jx: number; Jy: number; Jz: number; score: number } | null = null;
+  for (const c of candidates) {
+    const seed = findFluidJetSeed(f, room, acX, mountY, acZ, c.Jx, c.Jz);
+    if (!seed.found) continue;
+    const score = c.bias + scoreFluidCorridor(f, room, seed, c.Jx, c.Jy, c.Jz);
+    if (!best || score > best.score) best = { seed, Jx: c.Jx, Jy: c.Jy, Jz: c.Jz, score };
+  }
+  return best;
+}
+
+function scoreFluidCorridor(
+  f: MACFields,
+  room: RoomDims,
+  seed: JetSeed,
+  jx: number,
+  jy: number,
+  jz: number,
+): number {
+  const { L, W, H } = room;
+  const { dx, dy, dz } = cellSize(room);
+  const x0 = (seed.ix + 0.5) * dx - L / 2;
+  const y0 = (seed.iy + 0.5) * dy;
+  const z0 = (seed.iz + 0.5) * dz - W / 2;
+  const ds = Math.max(0.08, Math.min(dx, dy, dz) * 0.6);
+  let score = 0;
+  for (let m = 0; m < 22; m++) {
+    const x = x0 + jx * ds * m;
+    const y = y0 + jy * ds * m;
+    const z = z0 + jz * ds * m;
+    if (x < -L / 2 || x > L / 2 || y < 0 || y > H || z < -W / 2 || z > W / 2) {
+      score -= m < 5 ? 4 : 1;
+      continue;
+    }
+    const ix = clamp(Math.floor((x + L / 2) / dx), 0, NX - 1);
+    const iy = clamp(Math.floor(y / dy), 0, NY - 1);
+    const iz = clamp(Math.floor((z + W / 2) / dz), 0, NZ - 1);
+    if (f.wall[CK(ix, iy, iz)]) score -= m < 5 ? 4 : 1;
+    else score += m < 5 ? 2.5 : 1;
+  }
+  return score;
+}
+
 function findFluidJetSeed(
   f: MACFields,
   room: RoomDims,
@@ -298,22 +367,63 @@ function findFluidJetSeed(
   acZ: number,
   jx: number,
   jz: number,
-): { ix: number; iz: number } {
+): JetSeed {
   const { L, W } = room;
-  const { dx, dz } = cellSize(room);
-  const iy = clamp(Math.round(mountY / cellSize(room).dy), 1, NY - 2);
+  const { dx, dy, dz } = cellSize(room);
+  const iy0 = clamp(Math.round(mountY / dy), 1, NY - 2);
   const step = Math.max(0.05, Math.min(dx, dz) * 0.55);
   let bestIX = clamp(Math.round((acX + L / 2) / dx), 1, NX - 2);
   let bestIZ = clamp(Math.round((acZ + W / 2) / dz), 1, NZ - 2);
-  for (let m = 0; m < 12; m++) {
+  let bestIY = iy0;
+  const yOffsets = [0, -1, 1, -2, 2, -3, 3];
+  for (let m = 0; m < 18; m++) {
     const x = acX + jx * step * m;
     const z = acZ + jz * step * m;
     const ix = clamp(Math.round((x + L / 2) / dx), 1, NX - 2);
     const iz = clamp(Math.round((z + W / 2) / dz), 1, NZ - 2);
     bestIX = ix; bestIZ = iz;
-    if (!f.wall[CK(ix, iy, iz)]) return { ix, iz };
+    for (const oy of yOffsets) {
+      const iy = clamp(iy0 + oy, 1, NY - 2);
+      bestIY = iy;
+      if (!f.wall[CK(ix, iy, iz)]) return { ix, iy, iz, found: true };
+    }
   }
-  return { ix: bestIX, iz: bestIZ };
+  const fallback = findNearestFluidSeed(f, room, acX, mountY, acZ);
+  return fallback ?? { ix: bestIX, iy: bestIY, iz: bestIZ, found: false };
+}
+
+function findNearestFluidSeed(
+  f: MACFields,
+  room: RoomDims,
+  acX: number,
+  mountY: number,
+  acZ: number,
+): JetSeed | null {
+  const { L, W } = room;
+  const { dx, dy, dz } = cellSize(room);
+  const ix0 = clamp(Math.round((acX + L / 2) / dx), 1, NX - 2);
+  const iy0 = clamp(Math.round(mountY / dy), 1, NY - 2);
+  const iz0 = clamp(Math.round((acZ + W / 2) / dz), 1, NZ - 2);
+  let best: JetSeed | null = null;
+  let bestD2 = Infinity;
+  for (let r = 1; r <= 6; r++) {
+    for (let diz = -r; diz <= r; diz++)
+      for (let diy = -Math.min(3, r); diy <= Math.min(3, r); diy++)
+        for (let dix = -r; dix <= r; dix++) {
+          if (Math.max(Math.abs(dix), Math.abs(diy), Math.abs(diz)) !== r) continue;
+          const ix = clamp(ix0 + dix, 1, NX - 2);
+          const iy = clamp(iy0 + diy, 1, NY - 2);
+          const iz = clamp(iz0 + diz, 1, NZ - 2);
+          if (f.wall[CK(ix, iy, iz)]) continue;
+          const d2 = dix * dix + diy * diy + diz * diz;
+          if (d2 < bestD2) {
+            bestD2 = d2;
+            best = { ix, iy, iz, found: true };
+          }
+        }
+    if (best) return best;
+  }
+  return null;
 }
 
 // ── AC cooling: physically-budgeted heat extraction ───────────────────
@@ -343,11 +453,15 @@ const CP_AIR  = 1005;    // J/(kg·K)
 
 export interface ACUnitForCooling {
   x: number; z: number;
+  wall?: "S" | "N" | "E" | "W";
   /** rated cooling power, kW */
   kw?: number;
   supply_temp_C?: number;
   /** Mounting height above floor, metres. Default = 88% of room height. */
   mounting_height_m?: number;
+  throw_distance_m?: number;
+  airflow_angle_deg?: number;
+  vertical_angle_deg?: number;
 }
 
 export function applyACCooling(
@@ -362,6 +476,11 @@ export function applyACCooling(
   for (const ac of units) {
     const Tsupply = ac.supply_temp_C ?? AC_SUPPLY_T_DEFAULT;
     const kW = Math.max(0.3, ac.kw ?? 1.5);
+    if (ac.wall) {
+      applyDirectionalACCooling(f, room, { ...ac, wall: ac.wall }, dt, Tsupply, kW, cellHeatCap);
+      continue;
+    }
+
     // kW^(1/3) → patch volume ∝ kW
     const sizeScale = Math.cbrt(kW / 1.5);
     const halfX = Math.max(2, Math.round(3 * sizeScale));
@@ -407,6 +526,69 @@ export function applyACCooling(
   }
 }
 
+function applyDirectionalACCooling(
+  f: MACFields,
+  room: RoomDims,
+  ac: ACUnitForCooling & { wall: "S" | "N" | "E" | "W" },
+  dt: number,
+  Tsupply: number,
+  kW: number,
+  cellHeatCap: number,
+): void {
+  const { L, W, H } = room;
+  const { dx, dy, dz } = cellSize(room);
+  const mountY = ac.mounting_height_m ?? H * 0.88;
+  const jet = resolveFluidJet(f, room, ac.x, mountY, ac.z, ac.wall, ac.airflow_angle_deg, ac.vertical_angle_deg);
+  if (!jet) return;
+  const { seed, Jx, Jy, Jz } = jet;
+
+  const sx = (seed.ix + 0.5) * dx - L / 2;
+  const sy = (seed.iy + 0.5) * dy;
+  const sz = (seed.iz + 0.5) * dz - W / 2;
+  const sizeScale = Math.cbrt(kW / 1.5);
+  const throwM = ac.throw_distance_m ?? 4;
+  const coreLen = Math.max(0.9, Math.min(1.8, throwM * 0.42)) * sizeScale;
+  const baseRadius = 0.18 * sizeScale;
+
+  let totalQ = 0;
+  const cells: { k: number; tFloor: number; w: number }[] = [];
+  for (let iz = 0; iz < NZ; iz++)
+    for (let iy = 0; iy < NY; iy++)
+      for (let ix = 0; ix < NX; ix++) {
+        const k = CK(ix, iy, iz);
+        if (f.wall[k]) continue;
+        const rx = (ix + 0.5) * dx - L / 2 - sx;
+        const ry = (iy + 0.5) * dy - sy;
+        const rz = (iz + 0.5) * dz - W / 2 - sz;
+        const along = rx * Jx + ry * Jy + rz * Jz;
+        if (along < -0.15 || along > coreLen) continue;
+        const lx = rx - along * Jx;
+        const ly = ry - along * Jy;
+        const lz = rz - along * Jz;
+        const lat = Math.hypot(lx, ly, lz);
+        const radius = baseRadius + 0.20 * Math.max(0, along);
+        if (lat > radius * 2.5) continue;
+        const lateral = Math.exp(-0.5 * (lat / Math.max(0.05, radius)) ** 2);
+        const stream = Math.max(0.15, 1 - Math.max(0, along) / (coreLen * 1.15));
+        const w = lateral * stream;
+        if (w < 0.015) continue;
+        const tFloor = Tsupply + 1.2 * (lat / Math.max(0.05, radius)) + 1.0 * Math.max(0, along) / coreLen;
+        const excess = f.T[k] - tFloor;
+        if (excess > 0) {
+          totalQ += cellHeatCap * excess * w;
+          cells.push({ k, tFloor, w });
+        }
+      }
+  if (totalQ <= 0 || cells.length === 0) return;
+
+  const Qbudget = kW * 1000 * dt;
+  const scale = Math.min(1, Qbudget / totalQ);
+  for (const { k, tFloor, w } of cells) {
+    const excess = f.T[k] - tFloor;
+    if (excess > 0) f.T[k] -= scale * excess * w;
+  }
+}
+
 /**
  * Backward-compat wrapper. Older call sites used `setACSupplyT(f, room, units)`
  * inside the worker tick loop without a dt argument. Internally now defers
@@ -417,7 +599,7 @@ export function applyACCooling(
  */
 export function setACSupplyT(
   f: MACFields, room: RoomDims,
-  units: { x: number; z: number; supply_temp_C?: number; kw?: number }[],
+  units: ACUnitForCooling[],
   dt = 0.05,
 ): void {
   applyACCooling(f, room, units, dt);

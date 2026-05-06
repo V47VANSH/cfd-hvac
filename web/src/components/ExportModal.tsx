@@ -1,7 +1,7 @@
 "use client";
 
 import { useEffect, useRef, useState } from "react";
-import { sceneHash, type Scene } from "@/lib/io/schema";
+import { migrateScene, sceneHash, type Scene } from "@/lib/io/schema";
 import { calcHeatLoad } from "@/lib/ashrae/heatLoad";
 
 interface Props {
@@ -37,7 +37,7 @@ function serialiseSceneForSave(s: Scene): unknown {
  * back to a Float32Array so the renderer + voxelizer accept it.
  */
 function hydrateScene(raw: unknown): Scene {
-  const s = raw as Scene & { geometry: { stl?: Array<{ positions?: unknown }> } };
+  const s = migrateScene(raw) as Scene & { geometry: { stl?: Array<{ positions?: unknown }> } };
   if (s.geometry?.stl) {
     s.geometry.stl = s.geometry.stl.map((stl) => {
       const p = stl.positions;
@@ -55,7 +55,25 @@ function hydrateScene(raw: unknown): Scene {
       return stl as Scene["geometry"]["stl"][number];
     }) as Scene["geometry"]["stl"];
   }
-  return s as Scene;
+  return normaliseLoadedScene(s as Scene);
+}
+
+function normaliseLoadedScene(s: Scene): Scene {
+  const hasRoomSTL = s.geometry?.stl?.some((stl) => stl.role === "room") ?? false;
+  if (!hasRoomSTL || !Array.isArray(s.ac_units) || s.geometry.H <= 3.5) return s;
+
+  const defaultSplitMount = Math.min(1.8, Math.max(0.6, s.geometry.H - 0.3));
+  let changed = false;
+  const acUnits = s.ac_units.map((ac) => {
+    if ((ac.type ?? "split") !== "split") return ac;
+    const y = ac.mounting_height_m;
+    if (typeof y !== "number") return ac;
+    if (y <= Math.max(3.0, s.geometry.H * 0.72)) return ac;
+    changed = true;
+    return { ...ac, mounting_height_m: defaultSplitMount };
+  });
+
+  return changed ? { ...s, ac_units: acUnits } : s;
 }
 
 export function ExportModal({ open, onClose, scene, ac, onLoadScene }: Props) {

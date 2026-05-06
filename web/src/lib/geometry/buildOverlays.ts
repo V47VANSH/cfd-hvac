@@ -380,11 +380,11 @@ export function buildOverlays(geo: Geometry, opts: BuildOverlaysOptions = {}): O
       for (const w of ["S","N","W","E"] as const)
         (wallMeshes[w].material as THREE.MeshBasicMaterial).opacity = 0;
       (sliceMesh.material as THREE.MeshBasicMaterial).opacity =
-        showScalar ? 0.85 : showFlow ? 0.55 : 0;
+        showScalar ? 0.52 : showFlow ? 0.20 : 0;
       (longSliceMesh.material as THREE.MeshBasicMaterial).opacity =
-        showScalar ? 0.40 : showFlow ? 0.30 : 0;
+        showScalar ? 0.18 : showFlow ? 0.08 : 0;
       (crossSliceMesh.material as THREE.MeshBasicMaterial).opacity =
-        showScalar ? 0.34 : showFlow ? 0.26 : 0;
+        showScalar ? 0.15 : showFlow ? 0.07 : 0;
       return;
     }
     (floorMesh.material as THREE.MeshBasicMaterial).opacity =

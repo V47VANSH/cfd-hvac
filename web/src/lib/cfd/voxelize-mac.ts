@@ -92,20 +92,13 @@ export function voxelizeSTLMAC(
   const { L, W } = room;
   const { dx, dy, dz } = cellSize(room);
   for (const s of stls) {
-    if (!s.positions || s.positions.length === 0) continue;
-    // Room STLs define the simulation domain. Voxelization rule:
-    //   1. Stamp every cell that any room triangle passes through as wall
-    //      (this gives us the room SHELL — floors, walls, ceiling).
-    //   2. Flood-fill from the bbox corner (definitely OUTSIDE the L-shape)
-    //      through fluid cells — these are also outside, mark them wall.
-    //   3. What's left as fluid is the cells INSIDE the L-shape.
-    //
-    // After this pass, the CFD solver sees the actual room geometry and
-    // ignores the bbox cuboid corners that are outside the L-shape.
+    // Room STLs apply the hardcoded hexagonal-prism mask regardless of
+    // whether positions are populated (see roomMask.ts).
     if (s.role === "room") {
       voxelizeRoomShell(f, room, s);
       continue;
     }
+    if (!s.positions || s.positions.length === 0) continue;
     const sc = s.scale || 1;
     let minX = +Infinity, maxX = -Infinity;
     let minY = +Infinity, maxY = -Infinity;
@@ -140,7 +133,6 @@ export function voxelizeSTLMAC(
 function voxelizeRoomShell(
   f: MACFields, room: RoomDims, s: STLObject,
 ): void {
-  if (!s.positions) return;
   const mask = computeRoomMask(
     { NX, NY, NZ, L: room.L, W: room.W, H: room.H }, s,
   );

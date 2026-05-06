@@ -157,7 +157,7 @@ function ACProps({
              value={a.supply_temp_C ?? 14}
              onChange={(v) => update({ supply_temp_C: v })} />
       <Field label="Pitch °" step={1} min={-30} max={20}
-             value={a.vertical_angle_deg ?? -10}
+             value={a.vertical_angle_deg ?? -5}
              onChange={(v) => update({ vertical_angle_deg: v })} />
       <Divider label="Swing (oscillation)" />
       <SelectField

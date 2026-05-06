@@ -12,7 +12,7 @@
  * panel, optimizer) don't care which solver produced the fields.
  */
 
-import { makeFields, NCELLS, NX as LEG_NX, NY as LEG_NY, NZ as LEG_NZ, type GridFields, type RoomDims } from "@/lib/cfd/grid";
+import { makeFields, NCELLS, NX as LEG_NX, NY as LEG_NY, NZ as LEG_NZ, type GridFields } from "@/lib/cfd/grid";
 import { T_AMB, DT, MAX_STEPS } from "@/lib/cfd/constants";
 import { voxelizeObstacles, voxelizeBlocks, voxelizeSTL } from "@/lib/cfd/voxelize";
 import {
@@ -81,7 +81,7 @@ function buildSupplyTempTable(s: Scene, ac: typeof acPositions): void {
       kw:             u?.kw                  ?? 1.5,
       throw_m:        u?.throw_distance_m    ?? 4,
       yaw_deg:        u?.airflow_angle_deg   ?? 0,
-      pitch_deg:      u?.vertical_angle_deg  ?? -10,
+      pitch_deg:      u?.vertical_angle_deg  ?? -5,
       flow_cfm:       u?.flow_rate_cfm       ?? 350,
       mounting_height_m: u?.mounting_height_m,
       swing_h:        u?.swing_horizontal    ?? false,
@@ -170,6 +170,9 @@ export type WorkerEvent =
       Vx: ArrayBuffer;
       Vy: ArrayBuffer;
       Vz: ArrayBuffer;
+      // Wall mask (Uint8 payload) — populated when backend === "mac";
+      // viz uses it to skip cells outside the L-shape / inside obstacles.
+      wall?: ArrayBuffer;
       // MAC-only payload (transferred only when backend === "mac")
       RH?:   ArrayBuffer;
       CO2?:  ArrayBuffer;
@@ -215,7 +218,14 @@ function rebuildLegacy(s: Scene, ac: typeof acPositions) {
   voxelizeBlocks(legacyFields, s.geometry, s.geometry.extensions);
   voxelizeSTL(legacyFields, s.geometry, s.geometry.stl);
   injectHeatSources(legacyFields, s.geometry, s.obstacles);
-  injectACJets(legacyFields, s.geometry, ac);
+  // Augment AC list with mounting_height_m from the scene so the legacy
+  // jet sits at the right Y for STL-room scenes (where bbox H may be
+  // tall due to a chimney).
+  const acAug = ac.map((a) => {
+    const u = s.ac_units.find((x) => x.x === a.x && x.z === a.z && x.wall === a.wall);
+    return { ...a, mounting_height_m: u?.mounting_height_m };
+  });
+  injectACJets(legacyFields, s.geometry, acAug);
   injectFans(legacyFields, s.geometry, s.obstacles);
   injectInfiltration(legacyFields, s.geometry, s.openings);
 }
@@ -238,8 +248,10 @@ function rebuildMAC(s: Scene, ac: typeof acPositions) {
     const u = s.ac_units.find((x) => x.x === a.x && x.z === a.z && x.wall === a.wall);
     return {
       x: a.x, z: a.z, wall: a.wall,
+      kw:               u?.kw,
       throwDistance:   u?.throw_distance_m,
       airflowAngleDeg: u?.airflow_angle_deg,
+      verticalAngleDeg: u?.vertical_angle_deg,
       flowRateM3s:     u?.flow_rate_cfm ? u.flow_rate_cfm * 0.000472 : undefined,
       mountingHeightM: u?.mounting_height_m,
     };
@@ -267,12 +279,16 @@ function postLegacySnapshot() {
   const Vx = new Float32Array(legacyFields.Vx).buffer;
   const Vy = new Float32Array(legacyFields.Vy).buffer;
   const Vz = new Float32Array(legacyFields.Vz).buffer;
+  // Wall mask copy so the viz layer (arrows / particles / overlays) can
+  // skip cells outside the L-shape — same wire format as MAC snapshot.
+  const wallCopy = new Uint8Array(legacyFields.wall);
+  const wallBuf = wallCopy.buffer;
   const ev: WorkerEvent = {
     kind: "snapshot", step: stepCount, elapsedS: elapsedSimS, durationS: targetDurationS,
     backend: "legacy",
-    metrics: m, T, Vx, Vy, Vz,
+    metrics: m, T, Vx, Vy, Vz, wall: wallBuf,
   };
-  (self as unknown as Worker).postMessage(ev, [T, Vx, Vy, Vz]);
+  (self as unknown as Worker).postMessage(ev, [T, Vx, Vy, Vz, wallBuf]);
 }
 
 function postMACSnapshot() {
@@ -319,14 +335,18 @@ function postMACSnapshot() {
   const CO2 = CO2copy.buffer;
   const TmrtBuf = TmrtCopy.buffer;
   const VxBuf = Vx.buffer, VyBuf = Vy.buffer, VzBuf = Vz.buffer;
+  // Wall-mask copy (Uint8) so the viz layer can skip outside-L-shape
+  // cells. Tiny payload (~14 KB at default grid) — not worth lazy.
+  const wallCopy = new Uint8Array(macFields.wall);
+  const wallBuf = wallCopy.buffer;
   const ev: WorkerEvent = {
     kind: "snapshot", step: stepCount, elapsedS: elapsedSimS, durationS: targetDurationS,
-    backend: "mac",
+    backend,
     metrics: m,
     T, Vx: VxBuf, Vy: VyBuf, Vz: VzBuf,
-    RH, CO2, Tmrt: TmrtBuf,
+    RH, CO2, Tmrt: TmrtBuf, wall: wallBuf,
   };
-  (self as unknown as Worker).postMessage(ev, [T, VxBuf, VyBuf, VzBuf, RH, CO2, TmrtBuf]);
+  (self as unknown as Worker).postMessage(ev, [T, VxBuf, VyBuf, VzBuf, RH, CO2, TmrtBuf, wallBuf]);
 }
 
 function sanitize(a: Float32Array, fill: number): void {
@@ -371,7 +391,7 @@ self.onmessage = (e: MessageEvent<WorkerCommand>) => {
       if (cmd.backend) backend = cmd.backend;
       if (typeof cmd.durationS === "number" && cmd.durationS > 0) targetDurationS = cmd.durationS;
       // Best-effort calibration load on the MAC path. Falls back to defaults.
-      if (backend === "mac") {
+      if (backend === "mac" || backend === "mac-webgl2") {
         loadCalibration().then((c) => { calibration = c; });
       }
       rebuildScene(scene, acPositions);

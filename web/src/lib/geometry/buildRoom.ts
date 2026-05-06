@@ -151,13 +151,16 @@ export function buildRoomMeshes(geo: Geometry, opts: BuildRoomOptions = {}): Roo
   slab.visible = !hideShell;
   group.add(slab);
 
-  // Compass labels — keep them in STL mode too so the user knows which
-  // side of the STL room is which (they're sized small + faint, no
-  // visual conflict with the STL silhouette).
-  group.add(makeLabel("N", 0,         H * 0.9,  W/2 - 0.12));
-  group.add(makeLabel("S", 0,         H * 0.9, -W/2 + 0.12));
-  group.add(makeLabel("E",  L/2 + 0.12, H * 0.9, 0));
-  group.add(makeLabel("W", -L/2 - 0.12, H * 0.9, 0));
+  // Compass labels — only when the cuboidal shell is showing. In STL
+  // room mode the labels would float at the bbox corners (often outside
+  // the L-shape), reading as ghost outer-cuboid markers; suppress them
+  // entirely so the only visible structure is the STL room itself.
+  if (!hideShell) {
+    group.add(makeLabel("N", 0,         H * 0.9,  W/2 - 0.12));
+    group.add(makeLabel("S", 0,         H * 0.9, -W/2 + 0.12));
+    group.add(makeLabel("E",  L/2 + 0.12, H * 0.9, 0));
+    group.add(makeLabel("W", -L/2 - 0.12, H * 0.9, 0));
+  }
 
   return {
     group,

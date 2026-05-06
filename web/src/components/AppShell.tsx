@@ -23,6 +23,8 @@ export function AppShell() {
   const [selection, setSelection] = useState<Selection>({ id: null, type: null });
   const [curTool, setCurTool]   = useState<ToolKind>("orbit");
   const [simView, setSimView]   = useState<SimView>("both");
+  // Default backend: MAC, so the browser product starts on the honest
+  // staggered-grid solver while Legacy remains available as a baseline.
   const [backend, setBackend]   = useState<CFDBackend>("mac");
   const [exportOpen, setExportOpen] = useState(false);
   const [optimizing, setOptimizing] = useState(false);
@@ -152,7 +154,7 @@ export function AppShell() {
             id, wall: res.best.wall, x: res.best.x, z: res.best.z,
             mounting_height_m: defaultMountY,
             kw: 1.5, capacity_tr: 0.43, type: "split",
-            throw_distance_m: 4.0, airflow_angle_deg: 0, flow_rate_cfm: 350,
+            throw_distance_m: 4.0, airflow_angle_deg: 0, vertical_angle_deg: -5, flow_rate_cfm: 350,
             supply_temp_C: 14,
             on: true,
           }];
@@ -225,6 +227,14 @@ export function AppShell() {
         onClose={() => setExportOpen(false)}
         scene={scene}
         ac={effectiveAc}
+        onLoadScene={(s) => {
+          // Stop any running sim, clear cached snapshots, then swap in
+          // the loaded scene wholesale.
+          if (sim.simRunning) sim.stop();
+          setScene(s);
+          setSelection({ id: null, type: null });
+          setSlotA(null); setSlotB(null);
+        }}
       />
       <ComparisonView
         open={compareOpen}

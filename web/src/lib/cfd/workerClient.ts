@@ -26,6 +26,9 @@ export interface CFDSnapshot {
   RH?:   Float32Array;
   CO2?:  Float32Array;
   Tmrt?: Float32Array;
+  /** Cell-centred wall mask (Uint8: 1 = solid / outside L-shape, 0 = fluid).
+   *  Used by viz to hide arrows/particles in non-fluid cells. */
+  wall?: Uint8Array;
 }
 
 export interface CFDClient {
@@ -69,6 +72,7 @@ export function createCFDClient(): CFDClient {
         RH:   ev.RH   ? new Float32Array(ev.RH)   : undefined,
         CO2:  ev.CO2  ? new Float32Array(ev.CO2)  : undefined,
         Tmrt: ev.Tmrt ? new Float32Array(ev.Tmrt) : undefined,
+        wall: ev.wall ? new Uint8Array(ev.wall)   : undefined,
       });
     } else if (ev.kind === "done") {
       doneCb?.(ev.step, ev.elapsedS ?? 0);

@@ -53,12 +53,16 @@ export function injectHeatSources(
 export function injectACJets(
   fields: GridFields,
   room: RoomDims,
-  acUnits: { x: number; z: number; wall: "S" | "N" | "E" | "W" }[],
+  acUnits: { x: number; z: number; wall: "S" | "N" | "E" | "W"; mounting_height_m?: number }[],
 ): void {
   const { L, W, H } = room;
   const { dx, dy, dz } = cellSize(room);
   for (const ac of acUnits) {
-    const acIY = Math.round((H * 0.88) / dy);
+    // Mounting Y from per-AC value if provided, else legacy 88% of room
+    // height. For STL rooms with chimney bbox (~5 m), explicit
+    // mounting_height_m of 1.8 m keeps the jet at head level.
+    const mountY = ac.mounting_height_m ?? H * 0.88;
+    const acIY = Math.round(mountY / dy);
     const acIX = Math.round((ac.x + L / 2) / dx);
     const acIZ = Math.round((ac.z + W / 2) / dz);
     let jx = 0, jz = 0;
@@ -231,7 +235,7 @@ export function injectInfiltration(
 export function setACCold(
   fields: GridFields,
   room: RoomDims,
-  acUnits: { x: number; z: number; supply_temp_C?: number }[],
+  acUnits: { x: number; z: number; supply_temp_C?: number; mounting_height_m?: number }[],
 ): void {
   const { L, W, H } = room;
   const { dx, dy, dz } = cellSize(room);
@@ -239,7 +243,8 @@ export function setACCold(
     const Tsupply = ac.supply_temp_C ?? 14;
     const acIX = Math.round((ac.x + L / 2) / dx);
     const acIZ = Math.round((ac.z + W / 2) / dz);
-    const acIY = Math.round(H * 0.88 / dy);
+    const mountY = ac.mounting_height_m ?? H * 0.88;
+    const acIY = Math.round(mountY / dy);
     for (let diz = -1; diz <= 1; diz++)
       for (let diy = -1; diy <= 1; diy++)
         for (let dix = -2; dix <= 2; dix++) {

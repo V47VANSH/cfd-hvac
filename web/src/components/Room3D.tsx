@@ -1,12 +1,13 @@
 "use client";
 
-import { useEffect, useRef } from "react";
+import { useEffect, useLayoutEffect, useRef } from "react";
 import * as THREE from "three";
 import { buildRoomMeshes, type RoomMeshes } from "@/lib/geometry/buildRoom";
 import { buildOverlays, type Overlays, type SimView, isComfortView } from "@/lib/geometry/buildOverlays";
 import { makeComfortContext } from "@/lib/comfort";
 import { buildArrows,   type ArrowField } from "@/lib/geometry/buildArrows";
 import { buildParticles, type Particles  } from "@/lib/geometry/buildParticles";
+import { buildFieldPoints, type FieldPoints } from "@/lib/geometry/buildFieldPoints";
 import { buildOpening } from "@/lib/geometry/buildOpening";
 import { buildObstacle } from "@/lib/geometry/buildObstacle";
 import { buildConstraintMeshes, type ConstraintMeshes } from "@/lib/geometry/buildConstraints";
@@ -96,7 +97,9 @@ export function Room3D(props: Props) {
 
   // Latest props bag — read by long-lived handlers/loop without re-binding.
   const latestRef = useRef(props);
-  latestRef.current = props;
+  useLayoutEffect(() => {
+    latestRef.current = props;
+  });
 
   // All Three.js state lives here.
   const sceneRef = useRef<{
@@ -112,6 +115,7 @@ export function Room3D(props: Props) {
       feat:    THREE.Group;
       obs:     THREE.Group;
       arrow:   THREE.Group;
+      field:   THREE.Group;
       part:    THREE.Group;
       handle:  THREE.Group;
       ac:      THREE.Group;
@@ -121,6 +125,7 @@ export function Room3D(props: Props) {
     roomMeshes: RoomMeshes | null;
     overlays:   Overlays | null;
     arrows:     ArrowField | null;
+    fieldPoints: FieldPoints | null;
     particles:  Particles | null;
     featMeshes: Map<number, THREE.Group>;
     obsMeshes:  Map<number, THREE.Group>;
@@ -163,6 +168,7 @@ export function Room3D(props: Props) {
       feat:    new THREE.Group(),
       obs:     new THREE.Group(),
       arrow:   new THREE.Group(),
+      field:   new THREE.Group(),
       part:    new THREE.Group(),
       handle:  new THREE.Group(),
       ac:      new THREE.Group(),
@@ -853,6 +859,7 @@ export function Room3D(props: Props) {
         type: "split",
         throw_distance_m: 4.0,
         airflow_angle_deg: 0,
+        vertical_angle_deg: -5,
         flow_rate_cfm: 350,
         supply_temp_C: 14,
         on: true,
@@ -977,7 +984,15 @@ export function Room3D(props: Props) {
       // We use the latest snapshot via a ref stored on sceneRef
       const lastSnap = (sceneRef.current as { latestSnap?: CFDSnapshot } | null)?.latestSnap;
       if (particles && lastSnap && p.simRunning) {
-        particles.step(dt, p.scene.geometry, p.scene.obstacles, lastSnap, p.simView, p.ac);
+        // Augment p.ac with mounting_height_m from the scene so particles
+        // spawn at the actual AC mounting height (not the legacy 0.82·H
+        // bbox heuristic, which puts them above a chimney peak in STL
+        // rooms and out of the throw cone).
+        const acWithY = p.ac.map((a) => {
+          const u = p.scene.ac_units.find((x) => x.x === a.x && x.z === a.z && x.wall === a.wall);
+          return { ...a, mounting_height_m: u?.mounting_height_m };
+        });
+        particles.step(dt, p.scene.geometry, p.scene.obstacles, lastSnap, p.simView, acWithY);
       }
       void arrows; void overlays;
 
@@ -992,7 +1007,7 @@ export function Room3D(props: Props) {
     sceneRef.current = {
       renderer, scene, camera, raycaster, sph, autoSpinRef,
       groups,
-      roomMeshes: null, overlays: null, arrows: null, particles: null,
+      roomMeshes: null, overlays: null, arrows: null, fieldPoints: null, particles: null,
       featMeshes: new Map(),
       obsMeshes:  new Map(),
       acMeshes:   new Map(),
@@ -1013,6 +1028,7 @@ export function Room3D(props: Props) {
       s?.roomMeshes?.dispose();
       s?.overlays?.dispose();
       s?.arrows?.dispose();
+      s?.fieldPoints?.dispose();
       s?.particles?.dispose();
       for (const g of s?.featMeshes.values() ?? []) disposeGroup(g);
       for (const g of s?.obsMeshes.values()  ?? []) disposeGroup(g);
@@ -1039,13 +1055,15 @@ export function Room3D(props: Props) {
   const geomKey = `${L},${W},${H},${hasRoomSTL ? "stl" : "box"}`;
   useEffect(() => {
     const s = sceneRef.current; if (!s) return;
-    if (s.geomKey === geomKey && s.roomMeshes && s.overlays && s.arrows) return;
+    if (s.geomKey === geomKey && s.roomMeshes && s.overlays && s.arrows && s.fieldPoints) return;
     if (s.roomMeshes) { s.groups.room.remove(s.roomMeshes.group);   s.roomMeshes.dispose(); }
     if (s.overlays)   { s.groups.overlay.remove(s.overlays.group);  s.overlays.dispose(); }
     if (s.arrows)     { s.groups.arrow.remove(s.arrows.group);      s.arrows.dispose(); }
+    if (s.fieldPoints) { s.groups.field.remove(s.fieldPoints.group); s.fieldPoints.dispose(); }
     s.roomMeshes = buildRoomMeshes(props.scene.geometry, { hideShell: hasRoomSTL });
-    s.overlays   = buildOverlays(props.scene.geometry);
+    s.overlays   = buildOverlays(props.scene.geometry, { suppressBboxWallOverlays: hasRoomSTL });
     s.arrows     = buildArrows(props.scene.geometry);
+    s.fieldPoints = buildFieldPoints(props.scene.geometry);
     if (!s.particles) {
       s.particles = buildParticles();
       s.groups.part.add(s.particles.group);
@@ -1053,6 +1071,7 @@ export function Room3D(props: Props) {
     s.groups.room.add(s.roomMeshes.group);
     s.groups.overlay.add(s.overlays.group);
     s.groups.arrow.add(s.arrows.group);
+    s.groups.field.add(s.fieldPoints.group);
     s.geomKey = geomKey;
     s.sph.r = Math.max(L, W, H) * 2.8;
   }, [geomKey, L, W, H, hasRoomSTL, props.scene.geometry]);
@@ -1203,7 +1222,12 @@ export function Room3D(props: Props) {
       const ctx  = isComfortView(view)
         ? makeComfortContext(snap.T, env.RH_outdoor_pct, env.met, env.clo)
         : undefined;
+      const anchor = latestRef.current.ac[0];
+      s.overlays?.setCurtainAnchor(anchor?.x ?? 0, anchor?.z ?? 0);
       s.overlays?.update(snap, view, ctx);
+      if (!isComfortView(view)) {
+        s.fieldPoints?.update(snap, view);
+      }
       if (view !== "therm" && !isComfortView(view)) {
         s.arrows?.update(snap);
       }
@@ -1217,8 +1241,14 @@ export function Room3D(props: Props) {
     s.overlays?.setOpacity(props.simView, props.simRunning);
     const arrowsVisible = props.simRunning && props.simView !== "therm" && !isComfortView(props.simView);
     s.arrows?.setVisible(arrowsVisible);
+    s.fieldPoints?.setVisible(props.simRunning && !isComfortView(props.simView));
     s.particles?.setVisible(props.simRunning && !isComfortView(props.simView));
-    if (props.simRunning && s.particles) s.particles.reset(props.scene.geometry, props.ac);
+    const acWithY = props.ac.map((a) => {
+      const u = props.scene.ac_units.find((x) => x.x === a.x && x.z === a.z && x.wall === a.wall);
+      return { ...a, mounting_height_m: u?.mounting_height_m };
+    });
+    if (props.simRunning && s.particles) s.particles.reset(props.scene.geometry, acWithY);
+    s.overlays?.setCurtainAnchor(props.ac[0]?.x ?? 0, props.ac[0]?.z ?? 0);
     // Repaint overlay textures with the cached snapshot so the new view
     // is visible immediately, without waiting for the next worker tick.
     const snap = (s as { latestSnap?: CFDSnapshot }).latestSnap;
@@ -1228,6 +1258,7 @@ export function Room3D(props: Props) {
         ? makeComfortContext(snap.T, env.RH_outdoor_pct, env.met, env.clo)
         : undefined;
       s.overlays.update(snap, props.simView, ctx);
+      if (!isComfortView(props.simView)) s.fieldPoints?.update(snap, props.simView);
     }
   }, [props.simView, props.simRunning, props.ac, props.scene.geometry, props.scene.environment]);
 

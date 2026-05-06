@@ -36,8 +36,18 @@ class STLObject(BaseModel):
     rx_deg: float = 0.0
     rz_deg: float = 0.0
     triCount: int = 0
-    # The actual triangle positions are streamed separately (or referenced
-    # by URL) — they're too large for a JSON field.
+    # Optional raw vertex stream sent by the Tier-1 frontend so OpenFOAM
+    # can write a real triSurface/room.stl. If absent, the case generator
+    # falls back to AABB stamping (cuboidal approximation of the STL).
+    positions: Optional[list[float]] = None
+    # Tier-1 mode discrimination:
+    #   "room"     — this STL is the actual room boundary; snappyHexMesh
+    #                carves it out of the background blockMesh.
+    #   "obstacle" — interior object (default).
+    role: Optional[Literal["room", "obstacle"]] = None
+    # Cached bbox of raw model-space vertices (set by Tier-1 import for
+    # quick lookup without rescanning positions).
+    bbox: Optional[dict] = None
 
 
 class Geometry(BaseModel):
@@ -114,6 +124,9 @@ class ACUnit(BaseModel):
     id: int
     wall: Wall
     x: float; z: float
+    # Mounting height above floor, metres. None = case generator picks
+    # 88% of room height (legacy default).
+    mounting_height_m: Optional[float] = None
     kw: float
     capacity_tr: Optional[float] = None
     type: Optional[Literal["split", "window", "cassette"]] = "split"

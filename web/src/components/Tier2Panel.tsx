@@ -183,6 +183,32 @@ function ANSYSImporter({
   );
 }
 
+function ReportButton({ requestId }: { requestId: string }) {
+  const [busy, setBusy] = useState(false);
+  const [done, setDone] = useState(false);
+  const [err,  setErr]  = useState<string | null>(null);
+  const onClick = async () => {
+    setBusy(true); setErr(null);
+    try {
+      await buildTier2PDF(requestId);
+      setDone(true);
+      // Open the generated PDF in a new tab.
+      window.open(tier2ExportURL(requestId, "pdf"), "_blank");
+    } catch (e) {
+      setErr(e instanceof Error ? e.message : String(e));
+    } finally {
+      setBusy(false);
+    }
+  };
+  return (
+    <button onClick={onClick} disabled={busy}
+      className="rounded border border-[#284890] bg-[#0a1428] px-1.5 py-0.5 text-[9.5px] text-[#5888e0] hover:bg-[#0e1c38] disabled:opacity-40">
+      {busy ? "Building…" : done ? "↥ Reopen PDF" : "📄 Generate Report"}
+      {err && <span className="ml-1 text-[var(--color-accent-red)]">✗ {err.slice(0, 40)}</span>}
+    </button>
+  );
+}
+
 function ResultPreview({ result }: { result: unknown }) {
   let summary: string;
   if (result && typeof result === "object" && "field_summary" in result) {
@@ -192,8 +218,11 @@ function ResultPreview({ result }: { result: unknown }) {
       <div className="mt-1 rounded border border-[#142234] bg-[#040810] p-1.5 text-[9px]">
         <p className="text-[var(--color-accent-cyan)]">{summary}</p>
         {r.request_id && (
-          <a href={tier2ExportURL(r.request_id, "vtu")} target="_blank" rel="noreferrer"
-             className="text-[#5890d8] hover:underline">↥ Download VTK/VTU</a>
+          <div className="mt-1 flex flex-wrap items-center gap-2">
+            <ReportButton requestId={r.request_id} />
+            <a href={tier2ExportURL(r.request_id, "vtu")} target="_blank" rel="noreferrer"
+               className="text-[#5890d8] hover:underline">↥ VTK/VTU</a>
+          </div>
         )}
       </div>
     );

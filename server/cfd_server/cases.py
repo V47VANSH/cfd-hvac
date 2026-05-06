@@ -49,12 +49,22 @@ async def build_case(
     (case_dir / "system").mkdir(exist_ok=True)
     (case_dir / "constant").mkdir(exist_ok=True)
     (case_dir / "constant" / "polyMesh").mkdir(exist_ok=True)
+    (case_dir / "constant" / "triSurface").mkdir(parents=True, exist_ok=True)
     (case_dir / "0").mkdir(exist_ok=True)
     (case_dir / "triSurface").mkdir(exist_ok=True)
 
+    # If the scene includes a room STL, write its triangle mesh to
+    # constant/triSurface/room.stl so snappyHexMesh can carve it out of
+    # the background blockMesh. snappy reads triSurfaceMesh from
+    # constant/triSurface; the legacy `triSurface/` folder we still
+    # create above is used by the obstacle stamp (kept for back-compat).
+    room_stl = _find_room_stl(scene)
+    if room_stl is not None:
+        _write_room_stl_file(case_dir / "constant" / "triSurface" / "room.stl", room_stl)
+
     _write_control_dict(case_dir, transient, duration_s, radiation)
-    _write_blockmesh(case_dir, scene)
-    _write_snappy(case_dir, scene)
+    _write_blockmesh(case_dir, scene, room_stl)
+    _write_snappy(case_dir, scene, room_stl)
     _write_fv_schemes(case_dir, transient)
     _write_fv_solution(case_dir, radiation)
     _write_fv_options(case_dir, scene)
@@ -63,13 +73,54 @@ async def build_case(
     if radiation:
         _write_radiation_properties(case_dir)
     _write_g_field(case_dir)
-    _write_initial_T(case_dir, scene)
-    _write_initial_U(case_dir, scene)
-    _write_initial_p_rgh(case_dir, scene)
-    _write_initial_k_omega(case_dir, scene)
-    _write_initial_alphat_nut(case_dir, scene)
+    _write_initial_T(case_dir, scene, room_stl)
+    _write_initial_U(case_dir, scene, room_stl)
+    _write_initial_p_rgh(case_dir, scene, room_stl)
+    _write_initial_k_omega(case_dir, scene, room_stl)
+    _write_initial_alphat_nut(case_dir, scene, room_stl)
     if radiation:
         _write_radiation_fields(case_dir, scene)
+
+
+def _find_room_stl(scene: Scene):
+    """Return the first STL with role=='room' that has positions, or None."""
+    for s in scene.geometry.stl:
+        if s.role == "room" and s.positions and len(s.positions) >= 9:
+            return s
+    return None
+
+
+def _write_room_stl_file(path: Path, s) -> None:
+    """Write the room STL to disk as a single ASCII solid named 'room'.
+    snappyHexMesh's triSurfaceMesh reads the same vertex stream the
+    Tier-1 frontend already parsed, scaled + translated by the user's
+    transform so the file is in WORLD METRES (snappy assumes metres).
+    """
+    sc = s.scale or 1.0
+    xOff, yOff, zOff = s.x or 0.0, s.y or 0.0, s.z or 0.0
+    p = s.positions
+    n_tris = len(p) // 9
+    lines = ["solid room\n"]
+    for t in range(n_tris):
+        o = t * 9
+        ax = sc * p[o + 0] + xOff; ay = sc * p[o + 1] + yOff; az = sc * p[o + 2] + zOff
+        bx = sc * p[o + 3] + xOff; by = sc * p[o + 4] + yOff; bz = sc * p[o + 5] + zOff
+        cx = sc * p[o + 6] + xOff; cy = sc * p[o + 7] + yOff; cz = sc * p[o + 8] + zOff
+        # Recompute the world-space normal so OpenFOAM doesn't trust
+        # the model's possibly-flipped per-triangle normal.
+        ux, uy, uz = bx - ax, by - ay, bz - az
+        vx, vy, vz = cx - ax, cy - ay, cz - az
+        nx, ny, nz = uy * vz - uz * vy, uz * vx - ux * vz, ux * vy - uy * vx
+        L = (nx * nx + ny * ny + nz * nz) ** 0.5
+        if L > 0:
+            nx /= L; ny /= L; nz /= L
+        lines.append(f"  facet normal {nx:.6f} {ny:.6f} {nz:.6f}\n    outer loop\n")
+        lines.append(f"      vertex {ax:.5f} {ay:.5f} {az:.5f}\n")
+        lines.append(f"      vertex {bx:.5f} {by:.5f} {bz:.5f}\n")
+        lines.append(f"      vertex {cx:.5f} {cy:.5f} {cz:.5f}\n")
+        lines.append("    endloop\n  endfacet\n")
+    lines.append("endsolid room\n")
+    path.write_text("".join(lines))
 
 
 # ── Foam header ──────────────────────────────────────────────────────────
@@ -232,33 +283,23 @@ def _write_fv_options(case_dir: Path, scene: Scene) -> None:
 
 # ── blockMesh ────────────────────────────────────────────────────────────
 
-def _write_blockmesh(case_dir: Path, scene: Scene) -> None:
+def _write_blockmesh(case_dir: Path, scene: Scene, room_stl=None) -> None:
     """Emit blockMeshDict for the room AABB.
 
-    Vertex layout (Y is up):
+    For a room STL we expand the bbox slightly outward (+0.5 m on each
+    horizontal side) so snappyHexMesh has padding to flood-castellate
+    around the L-shape — without padding the perimeter snap can fail
+    when the STL touches the bbox boundary.
 
-        0: (-L/2, 0, -W/2)    SW floor
-        1: (-L/2, 0,  W/2)    NW floor
-        2: ( L/2, 0,  W/2)    NE floor
-        3: ( L/2, 0, -W/2)    SE floor
-        4: (-L/2, H, -W/2)    SW ceiling
-        5: (-L/2, H,  W/2)    NW ceiling
-        6: ( L/2, H,  W/2)    NE ceiling
-        7: ( L/2, H, -W/2)    SE ceiling
-
-    With this ordering the determinant
-        det([v1-v0, v3-v0, v4-v0]) = det([(0,0,W), (L,0,0), (0,H,0)]) = +LWH
-    is positive — i.e., the block is "right-side-out". The earlier ordering
-    (with vertex 1 at +x and vertex 3 at +z) gave −LWH and blockMesh
-    rejected it as "inside-out".
-
-    Block-local axes therefore map to world as:
-        local-x ← world +z (size W, n cells = nz_world)
-        local-y ← world +x (size L, n cells = nx_world)
-        local-z ← world +y (size H, n cells = ny_world)
-    so the cell-count tuple in the hex line is (nz, nx, ny).
+    Vertex layout (Y is up): see the original layout below — unchanged.
     """
     L, W, H = scene.geometry.L, scene.geometry.W, scene.geometry.H
+    if room_stl is not None:
+        # Bbox expansion: +0.5 m on each horizontal side, +0.3 m above
+        # the ceiling so the STL roof has snap clearance.
+        L = L + 1.0
+        W = W + 1.0
+        H = H + 0.3
     nx_w = max(20, int(L * 12))
     ny_w = max(15, int(H * 10))
     nz_w = max(20, int(W * 12))
@@ -294,13 +335,23 @@ def _write_blockmesh(case_dir: Path, scene: Scene) -> None:
 
 # ── snappyHexMesh ────────────────────────────────────────────────────────
 
-def _write_snappy(case_dir: Path, scene: Scene) -> None:
+def _write_snappy(case_dir: Path, scene: Scene, room_stl=None) -> None:
     """Emit snappyHexMeshDict with refinement boxes around obstacles and
     AC supply / return patches.
 
+    When `room_stl` is provided, also register the room STL as a
+    `triSurfaceMesh` in `geometry`, with a `refinementSurfaces` entry
+    whose `patchInfo` declares all carved faces should land on a single
+    `room` patch. The result: snappyHexMesh produces a polyMesh whose
+    interior matches the L-shape (cells outside the STL get removed),
+    and a `room` patch wraps every snapped surface — so the BC writers
+    can apply wall conditions there. The cuboidal blockMesh patches
+    (floor / ceiling / wall_S/N/E/W) are kept as a fallback for any
+    boundary face the snap doesn't reach.
+
     Refinement levels:
         0 = baseline (background mesh)
-        1 = around large obstacles (boxes, shelves)
+        1 = around large obstacles (boxes, shelves) + the room STL
         2 = around heat sources (humans, appliances)
         3 = around AC diffuser patches (highest detail near jets)
 
@@ -337,12 +388,42 @@ def _write_snappy(case_dir: Path, scene: Scene) -> None:
             levels  ((1.0 {level}));
         }}"""
 
+    # When the room STL is present, expose it as a triSurfaceMesh in the
+    # geometry block, and register a refinementSurface with a `room`
+    # patch so all snapped boundary faces land on one named patch.
+    room_geometry_block = ""
+    room_surface_block = ""
+    if room_stl is not None:
+        room_geometry_block = """
+        room.stl
+        {
+            type triSurfaceMesh;
+            name room;
+        }"""
+        # Level 2 refinement on the STL surface = ~2× finer cells along
+        # the actual room walls than the background mesh. Higher levels
+        # would balloon the cell count for complex models; 2 is a good
+        # tradeoff for HVAC analysis at default grid resolution.
+        room_surface_block = """
+        room
+        {
+            level (2 2);
+            patchInfo
+            {
+                type wall;
+            }
+        }"""
+    # The locationInMesh point must lie INSIDE the L-shape; the room
+    # centroid (origin XZ + half-height Y) is a safe default after the
+    # Tier-1 frontend's auto-fit centring. For very off-centre L-shapes
+    # the user can override via the API later.
+    location_in_mesh_y = scene.geometry.H / 2
     body = f"""castellatedMesh true;
 snap            true;
 addLayers       false;
 
 geometry
-{{{refinement_regions}
+{{{room_geometry_block}{refinement_regions}
 }}
 
 castellatedMeshControls
@@ -352,12 +433,14 @@ castellatedMeshControls
     minRefinementCells  0;
     nCellsBetweenLevels 3;
     features ();
-    refinementSurfaces  {{ }}
+    refinementSurfaces
+    {{{room_surface_block}
+    }}
     resolveFeatureAngle 30;
     refinementRegions
     {{{refinement_regions_levels}
     }}
-    locationInMesh      (0 {scene.geometry.H/2:.3f} 0);
+    locationInMesh      (0 {location_in_mesh_y:.3f} 0);
     allowFreeStandingZoneFaces true;
 }}
 
@@ -423,11 +506,19 @@ def _write_g_field(case_dir: Path) -> None:
 
 # ── 0/ initial fields ────────────────────────────────────────────────────
 
-def _write_initial_T(case_dir: Path, scene: Scene) -> None:
+def _write_initial_T(case_dir: Path, scene: Scene, room_stl=None) -> None:
     Tout_K = scene.environment.outdoor_temp_C + 273.15
     setpoint_K = scene.environment.setpoint_C + 273.15
     # Per-wall BCs from the scene's openings + materials
     wall_bcs = _per_wall_T_bcs(scene)
+    # When a room STL is present, snappy creates a `room` patch. Apply a
+    # weighted-average wall T (mean of the four cardinal walls) so the
+    # whole snapped boundary gets a reasonable BC. Patch-specific BCs
+    # (per-opening) come in stage-3 work.
+    room_bc = ""
+    if room_stl is not None:
+        avg_T = min(Tout_K, 303.0) * 0.7 + Tout_K * 0.3
+        room_bc = f"    room       {{ type fixedValue; value uniform {avg_T:.2f}; }}\n"
     body = (
         "dimensions      [0 0 0 1 0 0 0];\n"
         f"internalField   uniform {Tout_K:.2f};\n"
@@ -435,6 +526,7 @@ def _write_initial_T(case_dir: Path, scene: Scene) -> None:
         f"    floor      {{ type fixedValue; value uniform {min(Tout_K, 301):.2f}; }}\n"
         f"    ceiling    {{ type fixedValue; value uniform {min(Tout_K, 299):.2f}; }}\n"
         f"{wall_bcs}"
+        f"{room_bc}"
         "}\n"
     )
     _ = setpoint_K
@@ -464,14 +556,9 @@ def _per_wall_T_bcs(scene: Scene) -> str:
     return out
 
 
-def _write_initial_U(case_dir: Path, scene: Scene) -> None:
-    """Velocity initial + AC inlet body forces.
-
-    Phase-4 stage 2 uses ``fvOptions`` for AC momentum sources rather
-    than separate inlet patches (which would require a snappyHexMesh
-    surfaceMesh per AC). The walls remain noSlip; AC body forces give
-    the same effective inlet velocity field once converged.
-    """
+def _write_initial_U(case_dir: Path, scene: Scene, room_stl=None) -> None:
+    """Velocity initial + AC inlet body forces."""
+    room_bc = "    room       { type noSlip; }\n" if room_stl is not None else ""
     body = (
         "dimensions      [0 1 -1 0 0 0 0];\n"
         "internalField   uniform (0 0 0);\n"
@@ -479,58 +566,77 @@ def _write_initial_U(case_dir: Path, scene: Scene) -> None:
         "    floor      { type noSlip; }\n"
         "    ceiling    { type noSlip; }\n"
         "    \"wall_.*\"   { type noSlip; }\n"
+        f"{room_bc}"
         "}\n"
     )
     _ = scene
     (case_dir / "0" / "U").write_text(_foam_header("volVectorField", "0", "U") + body)
 
 
-def _write_initial_p_rgh(case_dir: Path, scene: Scene) -> None:
+def _write_initial_p_rgh(case_dir: Path, scene: Scene, room_stl=None) -> None:
     _ = scene
     # For buoyantBoussinesqSimpleFoam, p_rgh is the kinematic pressure
     # (p / rho_ref) minus the rho_ref·g·h hydrostatic term — units m²/s²,
     # NOT Pa. Using Pa here trips checkDims when the solver computes g·h.
+    room_bc = "    room { type fixedFluxPressure; value uniform 0; }\n" if room_stl is not None else ""
     body = (
         "dimensions      [0 2 -2 0 0 0 0];\n"
         "internalField   uniform 0;\n"
         "boundaryField\n{\n"
         "    \"(floor|ceiling|wall_.*)\" { type fixedFluxPressure; value uniform 0; }\n"
+        f"{room_bc}"
         "}\n"
     )
     (case_dir / "0" / "p_rgh").write_text(_foam_header("volScalarField", "0", "p_rgh") + body)
 
 
-def _write_initial_k_omega(case_dir: Path, scene: Scene) -> None:
+def _write_initial_k_omega(case_dir: Path, scene: Scene, room_stl=None) -> None:
     _ = scene
+    room_k = "    room { type kqRWallFunction; value uniform 0.01; }\n" if room_stl is not None else ""
+    room_omega = "    room { type omegaWallFunction; value uniform 1.0; }\n" if room_stl is not None else ""
     k_body = (
         "dimensions      [0 2 -2 0 0 0 0];\n"
         "internalField   uniform 0.01;\n"
-        "boundaryField   { \"(floor|ceiling|wall_.*)\" { type kqRWallFunction; value uniform 0.01; } }\n"
+        "boundaryField\n{\n"
+        "    \"(floor|ceiling|wall_.*)\" { type kqRWallFunction; value uniform 0.01; }\n"
+        f"{room_k}"
+        "}\n"
     )
     (case_dir / "0" / "k").write_text(_foam_header("volScalarField", "0", "k") + k_body)
     omega_body = (
         "dimensions      [0 0 -1 0 0 0 0];\n"
         "internalField   uniform 1.0;\n"
-        "boundaryField   { \"(floor|ceiling|wall_.*)\" { type omegaWallFunction; value uniform 1.0; } }\n"
+        "boundaryField\n{\n"
+        "    \"(floor|ceiling|wall_.*)\" { type omegaWallFunction; value uniform 1.0; }\n"
+        f"{room_omega}"
+        "}\n"
     )
     (case_dir / "0" / "omega").write_text(_foam_header("volScalarField", "0", "omega") + omega_body)
 
 
-def _write_initial_alphat_nut(case_dir: Path, scene: Scene) -> None:
+def _write_initial_alphat_nut(case_dir: Path, scene: Scene, room_stl=None) -> None:
     _ = scene
     # buoyantBoussinesqSimpleFoam is incompressible — all turbulent
     # transport coefficients are kinematic (m²/s), not dynamic (kg/m/s).
     # The kinematic alphat wall function is alphatJayatillekeWallFunction.
+    room_alphat = "    room { type alphatJayatillekeWallFunction; Prt 0.85; value uniform 0; }\n" if room_stl is not None else ""
+    room_nut    = "    room { type nutkWallFunction; value uniform 0; }\n" if room_stl is not None else ""
     alphat = (
         "dimensions      [0 2 -1 0 0 0 0];\n"
         "internalField   uniform 0;\n"
-        "boundaryField   { \"(floor|ceiling|wall_.*)\" { type alphatJayatillekeWallFunction; Prt 0.85; value uniform 0; } }\n"
+        "boundaryField\n{\n"
+        "    \"(floor|ceiling|wall_.*)\" { type alphatJayatillekeWallFunction; Prt 0.85; value uniform 0; }\n"
+        f"{room_alphat}"
+        "}\n"
     )
     (case_dir / "0" / "alphat").write_text(_foam_header("volScalarField", "0", "alphat") + alphat)
     nut = (
         "dimensions      [0 2 -1 0 0 0 0];\n"
         "internalField   uniform 0;\n"
-        "boundaryField   { \"(floor|ceiling|wall_.*)\" { type nutkWallFunction; value uniform 0; } }\n"
+        "boundaryField\n{\n"
+        "    \"(floor|ceiling|wall_.*)\" { type nutkWallFunction; value uniform 0; }\n"
+        f"{room_nut}"
+        "}\n"
     )
     (case_dir / "0" / "nut").write_text(_foam_header("volScalarField", "0", "nut") + nut)
 

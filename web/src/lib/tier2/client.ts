@@ -82,10 +82,25 @@ export async function runValidation(scene: Scene): Promise<ValidationResult> {
   const res = await fetch(`${baseURL}/run-validation`, {
     method: "POST",
     headers: { "content-type": "application/json" },
-    body: JSON.stringify(scene),
+    body: serialiseScene(scene),
   });
   if (!res.ok) throw new Error(`run-validation failed: ${res.status} ${await res.text()}`);
   return await res.json();
+}
+
+/**
+ * Stringify a Scene for JSON transport. Standard JSON.stringify on a
+ * Float32Array yields `{"0":1.5,"1":2.0,...}` (object with numeric keys),
+ * which Pydantic's `list[float]` field rejects. Convert STL.positions
+ * arrays to plain number[] before serialising — keeps the geometry
+ * intact so the OpenFOAM case generator can write a real
+ * triSurface/room.stl rather than falling back to AABB.
+ */
+function serialiseScene(scene: Scene): string {
+  return JSON.stringify(scene, (_k, v) => {
+    if (v instanceof Float32Array || v instanceof Float64Array) return Array.from(v);
+    return v;
+  });
 }
 
 export interface TransientResult {
@@ -101,7 +116,7 @@ export async function runTransient(scene: Scene, durationS: number = 600): Promi
   const res = await fetch(`${baseURL}/run-transient?duration_s=${durationS}`, {
     method: "POST",
     headers: { "content-type": "application/json" },
-    body: JSON.stringify(scene),
+    body: serialiseScene(scene),
   });
   if (!res.ok) throw new Error(`run-transient failed: ${res.status}`);
   return await res.json();
@@ -132,7 +147,7 @@ export async function optimizeMultiAC(scene: Scene, nAC = 2): Promise<OptResult>
   const res = await fetch(`${baseURL}/optimize-multi-ac?n_ac=${nAC}`, {
     method: "POST",
     headers: { "content-type": "application/json" },
-    body: JSON.stringify(scene),
+    body: serialiseScene(scene),
   });
   if (!res.ok) throw new Error(`optimize-multi-ac failed: ${res.status}`);
   return await res.json();
@@ -142,7 +157,7 @@ export async function optimizePareto(scene: Scene, nAC = 2, generations = 20): P
   const res = await fetch(`${baseURL}/optimize-pareto?n_ac=${nAC}&generations=${generations}`, {
     method: "POST",
     headers: { "content-type": "application/json" },
-    body: JSON.stringify(scene),
+    body: serialiseScene(scene),
   });
   if (!res.ok) throw new Error(`optimize-pareto failed: ${res.status}`);
   return await res.json();
@@ -173,7 +188,7 @@ export async function runBenchmark(name: "annex20" | "cavity" | "mundt"): Promis
 
 export async function importAnsysCSV(scene: Scene, file: File): Promise<unknown> {
   const fd = new FormData();
-  fd.append("scene", new Blob([JSON.stringify(scene)], { type: "application/json" }));
+  fd.append("scene", new Blob([serialiseScene(scene)], { type: "application/json" }));
   fd.append("csv_file", file);
   // Backend expects scene as the JSON body and csv as the multipart file.
   // FastAPI handles this with `Body(...)` + `File(...)` — we POST scene as
@@ -196,7 +211,7 @@ export async function meshIndependence(scene: Scene): Promise<unknown> {
   const res = await fetch(`${baseURL}/mesh-independence`, {
     method: "POST",
     headers: { "content-type": "application/json" },
-    body: JSON.stringify(scene),
+    body: serialiseScene(scene),
   });
   if (!res.ok) throw new Error(`mesh-independence failed: ${res.status}`);
   return await res.json();
@@ -206,7 +221,7 @@ export async function runUncertainty(scene: Scene, nSamples = 50): Promise<unkno
   const res = await fetch(`${baseURL}/uncertainty?n_samples=${nSamples}`, {
     method: "POST",
     headers: { "content-type": "application/json" },
-    body: JSON.stringify(scene),
+    body: serialiseScene(scene),
   });
   if (!res.ok) throw new Error(`uncertainty failed: ${res.status}`);
   return await res.json();

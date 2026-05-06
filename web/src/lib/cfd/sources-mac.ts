@@ -12,7 +12,6 @@ import {
 } from "./mac-grid";
 import type { Obstacle, Opening } from "@/lib/io/schema";
 
-const AC_JET_SPEED = 3.5;        // m/s at jet exit (typical split AC at full power)
 const AC_SUPPLY_T_DEFAULT = 14;  // °C — used when an AC unit doesn't carry its own supply_temp_C
 const HUMAN_W      = 75;         // sensible W per person (ASHRAE)
 const HUMAN_RH_KG  = 50e-3 / 3600; // 50 g/h moisture per person → kg/s
@@ -113,7 +112,7 @@ export interface ACJetSpec {
   /** Off-axis horizontal deflection in degrees (left/right of wall normal).
    *  When swing is on, the worker substitutes the instantaneous swept angle. */
   airflowAngleDeg?: number;
-  /** Vertical pitch in degrees. Negative = downward. Default −10°. When
+  /** Vertical pitch in degrees. Negative = downward. Default −5°. When
    *  vertical swing is on, the worker substitutes the swept pitch. */
   verticalAngleDeg?: number;
   /** Volumetric flow rate (m³/s). If absent, derived from kW. */
@@ -157,7 +156,7 @@ export function injectACJetsMAC(
     const horizX = nx * cy - nz * sy;
     const horizZ = nx * sy + nz * cy;
     // Pitch (vertical) rotation — keeps horizontal magnitude as cos(pitch)
-    const pitchR = ((ac.verticalAngleDeg ?? -10) * Math.PI) / 180;
+    const pitchR = ((ac.verticalAngleDeg ?? -5) * Math.PI) / 180;
     const cp = Math.cos(pitchR), sp = Math.sin(pitchR);
     const jx = horizX * cp;
     const jz = horizZ * cp;
@@ -173,14 +172,14 @@ export function injectACJetsMAC(
     // the "fluid side" — wall faces themselves are no-penetration). The
     // velocity at those interior faces is held at `target * J` each
     // substep by the worker tick (see below).
-    const cIX = Math.round((ac.x + L / 2) / dx);
-    const cIZ = Math.round((ac.z + W / 2) / dz);
     const mountY = ac.mountingHeightM ?? H * 0.88;
     const cIY = Math.round(mountY / dy);
+    const seed = findFluidJetSeed(f, room, ac.x, mountY, ac.z, Jx, Jz);
 
-    const ihMin = Math.max(1, (ac.wall === "S" || ac.wall === "N" ? cIX : cIZ) - halfPatchH);
+    const ihCenter = ac.wall === "S" || ac.wall === "N" ? seed.ix : seed.iz;
+    const ihMin = Math.max(1, ihCenter - halfPatchH);
     const ihMax = Math.min((ac.wall === "S" || ac.wall === "N" ? NX - 2 : NZ - 2),
-                           (ac.wall === "S" || ac.wall === "N" ? cIX : cIZ) + halfPatchH);
+                           ihCenter + halfPatchH);
     const ivMin = Math.max(1, cIY - halfPatchV);
     const ivMax = Math.min(NY - 2, cIY + halfPatchV);
 
@@ -188,9 +187,16 @@ export function injectACJetsMAC(
       for (let ih = ihMin; ih <= ihMax; ih++) {
         // For each cell on the inlet patch, write target face velocities
         // in the appropriate component arrays of `fu / fv / fw`.
-        const ix = (ac.wall === "S" || ac.wall === "N") ? ih : (ac.wall === "W" ? 1 : NX - 2);
-        const iz = (ac.wall === "S" || ac.wall === "N") ? (ac.wall === "S" ? 1 : NZ - 2) : ih;
+        //
+        // Important for STL rooms: the mounted wall may be an arbitrary
+        // interior STL perimeter, not the bbox's S/N/E/W face. Use the
+        // actual AC centre and walk just inside the room before stamping
+        // the diffuser patch. The `wall` label only chooses which tangent
+        // axis the diffuser spans.
+        const ix = (ac.wall === "S" || ac.wall === "N") ? ih : seed.ix;
+        const iz = (ac.wall === "S" || ac.wall === "N") ? seed.iz : ih;
         const iy = iv;
+        if (f.wall[CK(ix, iy, iz)]) continue;
         // u-face index (we set the u-face to the right of the patch cell)
         const ku1 = ix       + (NX + 1) * iy + (NX + 1) * NY * iz;
         const ku2 = (ix + 1) + (NX + 1) * iy + (NX + 1) * NY * iz;
@@ -218,12 +224,11 @@ export function injectACJetsMAC(
     // entrainment. This anchors the jet centreline so it doesn't swerve
     // off-target before the mixing zone develops.
     const throwM = ac.throwDistance ?? 4;
-    const assistRange = throwM / 3;
-    const decay = 2.0 / Math.max(0.3, assistRange);
+    const decay = 0.75 / Math.max(0.8, throwM);
     const ax = ac.x;
     const ay = ac.mountingHeightM ?? H * 0.88;
     const az = ac.z;
-    const assistMag = 0.4 * targetSpeed;   // 40 % of the inlet speed, dies off fast
+    const assistMag = 0.9 * targetSpeed;
 
     for (let iz = 0; iz < NZ; iz++)
       for (let iy = 0; iy < NY; iy++)
@@ -231,7 +236,7 @@ export function injectACJetsMAC(
           const x = ix * dx - L / 2;
           const y = (iy + 0.5) * dy;
           const z = (iz + 0.5) * dz - W / 2;
-          const g = jetGaussian(x - ax, y - ay, z - az, Jx, Jy, Jz, decay);
+          const g = jetGaussian(x - ax, y - ay, z - az, Jx, Jy, Jz, decay, throwM);
           if (g < 1e-3) continue;
           const ku = ix + (NX + 1) * iy + (NX + 1) * NY * iz;
           if (!f.uwall[ku]) f.fu[ku] += Jx * assistMag * g;
@@ -242,7 +247,7 @@ export function injectACJetsMAC(
           const x = (ix + 0.5) * dx - L / 2;
           const y = iy * dy;
           const z = (iz + 0.5) * dz - W / 2;
-          const g = jetGaussian(x - ax, y - ay, z - az, Jx, Jy, Jz, decay);
+          const g = jetGaussian(x - ax, y - ay, z - az, Jx, Jy, Jz, decay, throwM);
           if (g < 1e-3) continue;
           const kv = ix + NX * iy + NX * (NY + 1) * iz;
           if (!f.vwall[kv]) f.fv[kv] += Jy * assistMag * g;
@@ -253,7 +258,7 @@ export function injectACJetsMAC(
           const x = (ix + 0.5) * dx - L / 2;
           const y = (iy + 0.5) * dy;
           const z = iz * dz - W / 2;
-          const g = jetGaussian(x - ax, y - ay, z - az, Jx, Jy, Jz, decay);
+          const g = jetGaussian(x - ax, y - ay, z - az, Jx, Jy, Jz, decay, throwM);
           if (g < 1e-3) continue;
           const kw = ix + NX * iy + NX * NY * iz;
           if (!f.wwall[kw]) f.fw[kw] += Jz * assistMag * g;
@@ -267,17 +272,48 @@ function jetGaussian(
   rx: number, ry: number, rz: number,
   jx: number, jy: number, jz: number,
   decay: number,
+  throwM: number,
 ): number {
   const d = Math.sqrt(rx * rx + ry * ry + rz * rz) + 1e-3;
   const dot = (rx * jx + ry * jy + rz * jz) / d;
   if (dot < 0) return 0;
   const along = dot * d;
+  if (along > throwM * 1.2) return 0;
   const lx = rx - along * jx;
   const ly = ry - along * jy;
   const lz = rz - along * jz;
   const lat = Math.sqrt(lx * lx + ly * ly + lz * lz);
-  const spLat = 0.20 + 0.10 * along;     // narrower than before
-  return Math.exp(-0.5 * (lat / spLat) ** 2) * Math.exp(-decay * along);
+  const spLat = 0.12 + 0.20 * along;
+  const throwFade = Math.max(0, 1 - along / (throwM * 1.2));
+  return Math.exp(-0.5 * (lat / spLat) ** 2)
+    * Math.exp(-decay * along)
+    * (0.35 + 0.65 * throwFade);
+}
+
+function findFluidJetSeed(
+  f: MACFields,
+  room: RoomDims,
+  acX: number,
+  mountY: number,
+  acZ: number,
+  jx: number,
+  jz: number,
+): { ix: number; iz: number } {
+  const { L, W } = room;
+  const { dx, dz } = cellSize(room);
+  const iy = clamp(Math.round(mountY / cellSize(room).dy), 1, NY - 2);
+  const step = Math.max(0.05, Math.min(dx, dz) * 0.55);
+  let bestIX = clamp(Math.round((acX + L / 2) / dx), 1, NX - 2);
+  let bestIZ = clamp(Math.round((acZ + W / 2) / dz), 1, NZ - 2);
+  for (let m = 0; m < 12; m++) {
+    const x = acX + jx * step * m;
+    const z = acZ + jz * step * m;
+    const ix = clamp(Math.round((x + L / 2) / dx), 1, NX - 2);
+    const iz = clamp(Math.round((z + W / 2) / dz), 1, NZ - 2);
+    bestIX = ix; bestIZ = iz;
+    if (!f.wall[CK(ix, iy, iz)]) return { ix, iz };
+  }
+  return { ix: bestIX, iz: bestIZ };
 }
 
 // ── AC cooling: physically-budgeted heat extraction ───────────────────

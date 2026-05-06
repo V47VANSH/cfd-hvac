@@ -22,7 +22,6 @@ import { NX, NY, NZ, NCELLS, CK, NU, NV, NW, type MACFields, type RoomDims, cell
 import { Multigrid, divergence, subtractPressureGradient } from "./multigrid";
 import { advectVelocity, advectScalar } from "./advection";
 import { smagorinskyViscosity } from "./turbulence";
-import { computeViewFactorTmrt } from "./radiation";
 import type { Calibration } from "./calibration";
 import type { Opening } from "@/lib/io/schema";
 
@@ -142,6 +141,7 @@ export function stepMAC(input: StepInput): void {
   divergence(f, scratch.rhs, dt, room);
   scratch.mg.solve(scratch.rhs, f.wall, f.p, cal.mgCycles);
   subtractPressureGradient(f, f.p, dt, room);
+  reapplySupplyBoundary(f);
 }
 
 /**
@@ -277,4 +277,26 @@ function wallTempInfoAt(
 
 function clamp01(v: number): number {
   return v < 0 ? 0 : v > 1 ? 1 : v;
+}
+
+function reapplySupplyBoundary(f: MACFields): void {
+  // The pressure projection makes the field divergence-free, but it can
+  // also over-soften a tiny wall diffuser on a coarse grid. Re-impose a
+  // fraction of strong persistent forcing after projection so the AC outlet
+  // behaves like a maintained diffuser boundary, then the next projection
+  // handles the entrainment/return-flow correction.
+  const threshold = 0.25;
+  const pin = 0.38;
+  for (let i = 0; i < NU; i++) {
+    const target = f.fu[i];
+    if (!f.uwall[i] && Math.abs(target) > threshold) f.u[i] += (target - f.u[i]) * pin;
+  }
+  for (let i = 0; i < NV; i++) {
+    const target = f.fv[i];
+    if (!f.vwall[i] && Math.abs(target) > threshold) f.v[i] += (target - f.v[i]) * pin;
+  }
+  for (let i = 0; i < NW; i++) {
+    const target = f.fw[i];
+    if (!f.wwall[i] && Math.abs(target) > threshold) f.w[i] += (target - f.w[i]) * pin;
+  }
 }

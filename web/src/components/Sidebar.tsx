@@ -240,6 +240,10 @@ const LEGENDS: Record<SimView, { gradient: string; ticks: string[] }> = {
     gradient: "linear-gradient(to right, rgb(0,20,60), rgb(0,80,180), rgb(0,190,255), rgb(200,240,255))",
     ticks: ["0", "1.5", "3.0", "4.5 m/s"],
   },
+  vort: {
+    gradient: "linear-gradient(to right, rgb(8,18,44), rgb(24,112,210), rgb(52,220,190), rgb(232,220,64), rgb(240,88,160), rgb(255,245,255))",
+    ticks: ["calm", "shear", "vortex core"],
+  },
   pmv: {
     gradient: "linear-gradient(to right, rgb(32,72,200), rgb(96,168,232), rgb(220,232,232), rgb(240,168,88), rgb(216,32,32))",
     ticks: ["−3 cold", "0 neutral", "+3 hot"],

@@ -185,9 +185,10 @@ export function Toolbar({
         </button>
         <button
           onClick={onExport}
+          title="Save the full environment to JSON, or load a previously-saved one"
           className="rounded border border-[#182840] bg-[#0a1428] px-2.5 py-1 text-[10.5px] font-semibold text-[#407098] hover:bg-[#0e1c38]"
         >
-          ⚙ Export
+          💾 Save / Load
         </button>
       </div>
     </div>
@@ -364,6 +365,7 @@ function ViewToggle({
     { id: "both",  label: "Both",    title: "Thermal + airflow" },
     { id: "flow",  label: "Airflow", title: "Speed map + arrows + particles" },
     { id: "therm", label: "Thermal", title: "Temperature map" },
+    { id: "vort",  label: "Vortex",  title: "Vorticity magnitude + vector field" },
     { id: "pmv",   label: "PMV",     title: "Predicted Mean Vote (Fanger)" },
     { id: "ppd",   label: "PPD",     title: "% Dissatisfied" },
     { id: "dr",    label: "Draft",   title: "Draft Risk (ISO 7730)" },

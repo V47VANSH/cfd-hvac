@@ -1,9 +1,8 @@
 /**
- * 3D arrow vector field. Sample the velocity field at a regular lattice
- * (12 × 9 × 3 layers at 12/42/72 % of room height) and draw a line +
- * cone arrow per sample. Color and length scale with speed.
- *
- * Ported from v6 lines 957-1005.
+ * 3D arrow vector field. Samples the velocity field on multiple room-height
+ * layers and draws a line + cone arrow per sample. Color, length, opacity,
+ * and head scale follow local speed so AC throw and recirculation read at a
+ * glance.
  */
 
 import * as THREE from "three";
@@ -11,9 +10,9 @@ import { NX, NY, NZ, K } from "@/lib/cfd/grid";
 import { speedRGB } from "@/lib/cfd/colormap";
 import type { Geometry } from "@/lib/io/schema";
 
-const ARROW_NX = 12;
-const ARROW_NZ = 9;
-const ARROW_Y_FRACS = [0.12, 0.42, 0.72];
+const ARROW_NX = 16;
+const ARROW_NZ = 11;
+const ARROW_Y_FRACS = [0.14, 0.34, 0.56, 0.78];
 
 interface Arrow {
   line: THREE.Line;
@@ -23,7 +22,7 @@ interface Arrow {
 
 export interface ArrowField {
   group: THREE.Group;
-  update(snap: { Vx: Float32Array; Vy: Float32Array; Vz: Float32Array }): void;
+  update(snap: { Vx: Float32Array; Vy: Float32Array; Vz: Float32Array; wall?: Uint8Array }): void;
   setVisible(v: boolean): void;
   dispose(): void;
 }
@@ -52,7 +51,7 @@ export function buildArrows(geo: Geometry): ArrowField {
         group.add(line);
         disposables.push(lineGeo, lineMat);
 
-        const headGeo = new THREE.ConeGeometry(0.022, 0.07, 6);
+        const headGeo = new THREE.ConeGeometry(0.026, 0.085, 7);
         const headMat = new THREE.MeshBasicMaterial({
           color: 0x103060, transparent: true, opacity: 0.75,
         });
@@ -65,20 +64,32 @@ export function buildArrows(geo: Geometry): ArrowField {
       }
   }
 
-  function update(snap: { Vx: Float32Array; Vy: Float32Array; Vz: Float32Array }) {
-    const { Vx, Vy, Vz } = snap;
+  function update(snap: { Vx: Float32Array; Vy: Float32Array; Vz: Float32Array; wall?: Uint8Array }) {
+    const { Vx, Vy, Vz, wall } = snap;
     const dx = L / NX;
     const dz = W / NZ;
-    const sMax = 4;
+    const sMax = 4.5;
     for (const a of arrows) {
       const ix = Math.max(0, Math.min(NX - 1, Math.floor((a.wx + L / 2) / dx)));
       const iy = Math.max(0, Math.min(NY - 1, Math.round(a.yf * (NY - 1))));
       const iz = Math.max(0, Math.min(NZ - 1, Math.floor((a.wz + W / 2) / dz)));
       const k = K(ix, iy, iz);
+      // Skip arrows in wall / outside-L-shape cells — keeps viz clean
+      // when an STL room covers only part of the bbox.
+      const isWall = wall ? wall[k] === 1 : false;
+      if (isWall) {
+        a.line.visible = false;
+        a.head.visible = false;
+        continue;
+      } else {
+        a.line.visible = true;
+        a.head.visible = true;
+      }
       const vx = Vx[k], vy = Vy[k], vz = Vz[k];
       const spd = Math.sqrt(vx*vx + vy*vy + vz*vz);
       const scale = Math.min(spd / sMax, 1);
-      const len = scale * 0.32 + 0.018;
+      const lift = Math.pow(scale, 0.72);
+      const len = lift * 0.48 + 0.024;
       const nx = vx / Math.max(spd, 0.01);
       const ny = vy / Math.max(spd, 0.01);
       const nz = vz / Math.max(spd, 0.01);
@@ -87,6 +98,8 @@ export function buildArrows(geo: Geometry): ArrowField {
       pa[3] = nx * len; pa[4] = ny * len; pa[5] = nz * len;
       (a.line.geometry.attributes.position as THREE.BufferAttribute).needsUpdate = true;
       a.head.position.set(a.wx + nx * len, a.y + ny * len, a.wz + nz * len);
+      const headScale = 0.65 + lift * 1.25;
+      a.head.scale.setScalar(headScale);
       if (spd > 0.05) {
         const dir = new THREE.Vector3(nx, ny, nz).normalize();
         a.head.quaternion.setFromUnitVectors(new THREE.Vector3(0, 1, 0), dir);
@@ -95,8 +108,8 @@ export function buildArrows(geo: Geometry): ArrowField {
       const col = new THREE.Color(r / 255, g / 255, b / 255);
       (a.line.material as THREE.LineBasicMaterial).color.copy(col);
       (a.head.material as THREE.MeshBasicMaterial).color.copy(col);
-      (a.line.material as THREE.LineBasicMaterial).opacity = 0.2 + scale * 0.55;
-      (a.head.material as THREE.MeshBasicMaterial).opacity = 0.35 + scale * 0.55;
+      (a.line.material as THREE.LineBasicMaterial).opacity = 0.18 + lift * 0.62;
+      (a.head.material as THREE.MeshBasicMaterial).opacity = 0.24 + lift * 0.70;
     }
   }
 

@@ -99,10 +99,8 @@ export function voxelizeSTL(
   const { L, W } = room;
   const { dx, dy, dz } = cellSize(room);
   for (const s of stls) {
-    if (!s.positions || s.positions.length === 0) continue;
-    // Room STLs: stamp shell + flood-fill outside, so the legacy CFD
-    // also restricts itself to the actual L-shape (used by the
-    // optimizer's internal sim).
+    // Room STLs apply the hardcoded hexagonal-prism mask regardless of
+    // whether triangle positions are populated.
     if (s.role === "room") {
       const mask = computeRoomMask({ NX, NY, NZ, L: room.L, W: room.W, H: room.H }, s);
       for (let k = 0; k < NX * NY * NZ; k++) {
@@ -110,6 +108,7 @@ export function voxelizeSTL(
       }
       continue;
     }
+    if (!s.positions || s.positions.length === 0) continue;
     const sc = s.scale || 1;
     let minX = +Infinity, maxX = -Infinity;
     let minY = +Infinity, maxY = -Infinity;

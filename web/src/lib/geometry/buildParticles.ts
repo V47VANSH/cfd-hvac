@@ -42,8 +42,8 @@ export function buildParticles(): Particles {
   geo.setAttribute("position", new THREE.BufferAttribute(pPos, 3));
   geo.setAttribute("color", new THREE.BufferAttribute(pCol, 3));
   const mat = new THREE.PointsMaterial({
-    size: 0.044, vertexColors: true, transparent: true,
-    opacity: 0.92, sizeAttenuation: true, depthWrite: false,
+    size: 0.052, vertexColors: true, transparent: true,
+    opacity: 0.95, sizeAttenuation: true, depthWrite: false,
   });
   const points = new THREE.Points(geo, mat);
   points.visible = false;
@@ -55,7 +55,7 @@ export function buildParticles(): Particles {
   const trailMat = new THREE.LineBasicMaterial({
     vertexColors: true,
     transparent: true,
-    opacity: 0.32,
+    opacity: 0.45,
     depthWrite: false,
     blending: THREE.AdditiveBlending,
   });
@@ -203,9 +203,9 @@ export function buildParticles(): Particles {
       trailPos[ti + 3] = x;
       trailPos[ti + 4] = y;
       trailPos[ti + 5] = z;
-      trailCol[ti]     = pCol[pi] * 0.35;
-      trailCol[ti + 1] = pCol[pi + 1] * 0.35;
-      trailCol[ti + 2] = pCol[pi + 2] * 0.35;
+      trailCol[ti]     = pCol[pi] * 0.55;
+      trailCol[ti + 1] = pCol[pi + 1] * 0.55;
+      trailCol[ti + 2] = pCol[pi + 2] * 0.55;
       trailCol[ti + 3] = pCol[pi];
       trailCol[ti + 4] = pCol[pi + 1];
       trailCol[ti + 5] = pCol[pi + 2];

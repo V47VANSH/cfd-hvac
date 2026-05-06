@@ -44,16 +44,16 @@ export function buildArrows(geo: Geometry): ArrowField {
         const lineGeo = new THREE.BufferGeometry();
         lineGeo.setAttribute("position", new THREE.BufferAttribute(pts, 3));
         const lineMat = new THREE.LineBasicMaterial({
-          color: 0x103060, transparent: true, opacity: 0.6,
+          color: 0x2864c8, transparent: true, opacity: 0.7,
         });
         const line = new THREE.Line(lineGeo, lineMat);
         line.position.set(wx, y, wz);
         group.add(line);
         disposables.push(lineGeo, lineMat);
 
-        const headGeo = new THREE.ConeGeometry(0.026, 0.085, 7);
+        const headGeo = new THREE.ConeGeometry(0.034, 0.108, 9);
         const headMat = new THREE.MeshBasicMaterial({
-          color: 0x103060, transparent: true, opacity: 0.75,
+          color: 0x2864c8, transparent: true, opacity: 0.85,
         });
         const head = new THREE.Mesh(headGeo, headMat);
         head.position.set(wx, y, wz);
@@ -68,13 +68,13 @@ export function buildArrows(geo: Geometry): ArrowField {
     const { Vx, Vy, Vz, wall } = snap;
     const dx = L / NX;
     const dz = W / NZ;
-    const sMax = 4.5;
+    const sMax = 2.8;
     for (const a of arrows) {
       const ix = Math.max(0, Math.min(NX - 1, Math.floor((a.wx + L / 2) / dx)));
       const iy = Math.max(0, Math.min(NY - 1, Math.round(a.yf * (NY - 1))));
       const iz = Math.max(0, Math.min(NZ - 1, Math.floor((a.wz + W / 2) / dz)));
       const k = K(ix, iy, iz);
-      // Skip arrows in wall / outside-L-shape cells — keeps viz clean
+      // Skip arrows in wall / outside-hex cells — keeps viz clean
       // when an STL room covers only part of the bbox.
       const isWall = wall ? wall[k] === 1 : false;
       if (isWall) {
@@ -88,8 +88,8 @@ export function buildArrows(geo: Geometry): ArrowField {
       const vx = Vx[k], vy = Vy[k], vz = Vz[k];
       const spd = Math.sqrt(vx*vx + vy*vy + vz*vz);
       const scale = Math.min(spd / sMax, 1);
-      const lift = Math.pow(scale, 0.72);
-      const len = lift * 0.48 + 0.024;
+      const lift = Math.pow(scale, 0.55);
+      const len = lift * 0.56 + 0.032;
       const nx = vx / Math.max(spd, 0.01);
       const ny = vy / Math.max(spd, 0.01);
       const nz = vz / Math.max(spd, 0.01);
@@ -98,7 +98,7 @@ export function buildArrows(geo: Geometry): ArrowField {
       pa[3] = nx * len; pa[4] = ny * len; pa[5] = nz * len;
       (a.line.geometry.attributes.position as THREE.BufferAttribute).needsUpdate = true;
       a.head.position.set(a.wx + nx * len, a.y + ny * len, a.wz + nz * len);
-      const headScale = 0.65 + lift * 1.25;
+      const headScale = 0.85 + lift * 1.35;
       a.head.scale.setScalar(headScale);
       if (spd > 0.05) {
         const dir = new THREE.Vector3(nx, ny, nz).normalize();
@@ -108,8 +108,8 @@ export function buildArrows(geo: Geometry): ArrowField {
       const col = new THREE.Color(r / 255, g / 255, b / 255);
       (a.line.material as THREE.LineBasicMaterial).color.copy(col);
       (a.head.material as THREE.MeshBasicMaterial).color.copy(col);
-      (a.line.material as THREE.LineBasicMaterial).opacity = 0.18 + lift * 0.62;
-      (a.head.material as THREE.MeshBasicMaterial).opacity = 0.24 + lift * 0.70;
+      (a.line.material as THREE.LineBasicMaterial).opacity = 0.34 + lift * 0.56;
+      (a.head.material as THREE.MeshBasicMaterial).opacity = 0.42 + lift * 0.55;
     }
   }
 

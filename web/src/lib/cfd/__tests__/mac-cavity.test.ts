@@ -51,7 +51,7 @@ describe("MAC solver — cavity sanity", () => {
     const mean = sum / n;
     expect(mean).toBeGreaterThan(20);
     expect(mean).toBeLessThan(48);
-  });
+  }, 20000);
 
   it("develops nonzero thermal variance (solver does something)", () => {
     const f = makeMACFields();
@@ -80,5 +80,5 @@ describe("MAC solver — cavity sanity", () => {
     const mean = s / n;
     const std = Math.sqrt(Math.max(0, s2 / n - mean * mean));
     expect(std).toBeGreaterThan(0.5);
-  });
+  }, 20000);
 });

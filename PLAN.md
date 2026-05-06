@@ -348,7 +348,7 @@ Each phase ends with a deployable build. No phase blocks the previous one from b
 ### Phase 0 — Foundation (~1 week)
 - `git init`, GitHub repo, MIT license
 - Move `cfd_room_3d_v6.html` → `archive/` (untouched reference)
-- Vite + TypeScript project in `web/`
+- Next.js (App Router) + TypeScript + Tailwind project in `web/` (static-export mode)
 - Modularize: `geometry/`, `cfd/`, `comfort/`, `ashrae/`, `optimizer/`, `ui/`, `io/`
 - JSON schema v1 + migration scaffold
 - CFD step in a Web Worker
@@ -408,12 +408,12 @@ Each phase ends with a deployable build. No phase blocks the previous one from b
 
 **Tier 1**
 - TypeScript (strict mode)
-- Vite (bundler + dev server)
-- Three.js r128 (already in v6 — no upgrade unless needed)
-- Web Worker for CFD
-- `html2pdf.js` for reports
-- **No framework** (no React, no Vue) — vanilla DOM keeps the bundle small
-- **No CSS framework** — keep v6's hand-rolled CSS
+- **Next.js 15+** (App Router) — built with `output: 'export'` so Tier 1 ships as **plain static files**, no Node server at runtime
+- **Three.js r128** (already in v6 — no upgrade unless needed). Used **raw inside a single `useEffect`-managed component**, NOT react-three-fiber — the v6 imperative scene-graph code ports directly.
+- **Tailwind CSS** with v6's color/typography tokens captured in `tailwind.config.ts`. Custom widgets (toggles, range sliders) keep small CSS modules.
+- Web Worker for CFD (under `web/src/workers/cfd.worker.ts`)
+- `html2pdf.js` for reports (lazy-loaded on first export)
+- **No heavy UI library** (no Material UI, no Chakra, no Ant)
 
 **Tier 2**
 - Python 3.11
@@ -492,11 +492,16 @@ Do these now, in this order. Don't clone anything — this is greenfield on top 
    cfd/
      archive/
        cfd_room_3d_v6.html       ← the v6 monolith, never edited again
-     web/                         ← Vite + TS Tier 1 project
-       src/{geometry,cfd,comfort,ashrae,optimizer,ui,io}/
+     web/                         ← Next.js + TS + Tailwind (static export)
+       src/
+         app/                     ← App Router pages
+         lib/{geometry,cfd,comfort,ashrae,optimizer,io}/
+         components/              ← React components (UI shell)
+         workers/                 ← cfd.worker.ts
        public/
        package.json
-       vite.config.ts
+       next.config.mjs            ← output: 'export'
+       tailwind.config.ts
        tsconfig.json
      server/                      ← Tier 2 (created in Phase 4)
        pyproject.toml
@@ -510,7 +515,7 @@ Do these now, in this order. Don't clone anything — this is greenfield on top 
        SCHEMA.md
    ```
 
-6. **Lock framework choice now**: vanilla TypeScript + Vite + Three.js. No React. No CSS framework.
+6. **Framework locked**: Next.js 15+ (App Router, static export) + TypeScript + Tailwind + raw Three.js. No react-three-fiber. No heavy UI library.
 
 After these six steps, Phase 0 begins.
 

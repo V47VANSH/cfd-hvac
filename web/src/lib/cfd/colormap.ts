@@ -43,3 +43,54 @@ export const speedRGB = (s: number): RGB => lerp(SPEED_STOPS, s);
 export const T_MIN = 16;
 export const T_MAX = 45;
 export const SPEED_MAX = 4.5;
+
+// ── Comfort palettes ─────────────────────────────────────────────────────
+
+/**
+ * Diverging palette for PMV [-3..+3]: cold blue → neutral grey → hot red.
+ * Centred on the neutral band (-0.5..+0.5 ≈ ASHRAE 55 acceptable).
+ */
+const PMV_STOPS: RGB[] = [
+  [ 32,  72, 200],   // -3 cold
+  [ 96, 168, 232],   // -1.5
+  [220, 232, 232],   //  0  neutral
+  [240, 168,  88],   // +1.5
+  [216,  32,  32],   // +3 hot
+];
+
+/**
+ * Monotonic palette for PPD (% dissatisfied): green (good) → yellow → red.
+ * 0 = perfect (5 % minimum), 100 = nobody is comfortable.
+ */
+const PPD_STOPS: RGB[] = [
+  [ 56, 168,  72],   //  0
+  [216, 200,  64],   // 30
+  [232, 120,  40],   // 60
+  [200,  24,  24],   // 100
+];
+
+/**
+ * Monotonic palette for Draft Risk (%): cyan (no draft) → orange → magenta.
+ * Same scale as PPD (0..100).
+ */
+const DR_STOPS: RGB[] = [
+  [ 24,  88, 144],   //  0  no draft
+  [ 80, 196, 232],   // 25
+  [232, 168,  72],   // 50
+  [216,  56, 144],   // 100 strong draft
+];
+
+/** Map normalized PMV [(-3..+3) → 0..1] to RGB. */
+export const pmvRGB = (pmv: number): RGB =>
+  lerp(PMV_STOPS, (Math.max(-3, Math.min(3, pmv)) + 3) / 6);
+/** Map PPD percent [0..100] to RGB. */
+export const ppdRGB = (ppd: number): RGB =>
+  lerp(PPD_STOPS, Math.max(0, Math.min(100, ppd)) / 100);
+/** Map Draft Risk percent [0..100] to RGB. */
+export const drRGB  = (dr: number): RGB =>
+  lerp(DR_STOPS,  Math.max(0, Math.min(100, dr)) / 100);
+
+export const PMV_MIN = -3;
+export const PMV_MAX =  3;
+export const PPD_MAX = 100;
+export const DR_MAX  = 100;

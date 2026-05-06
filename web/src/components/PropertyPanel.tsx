@@ -1,7 +1,7 @@
 "use client";
 
 import type { Selection } from "@/components/Room3D";
-import type { Scene, Opening, Obstacle, ACUnit, ObstacleShape } from "@/lib/io/schema";
+import type { Scene, Opening, Obstacle, ACUnit, ObstacleShape, STLObject } from "@/lib/io/schema";
 
 interface Props {
   scene:        Scene;
@@ -28,7 +28,63 @@ export function PropertyPanel({ scene, setScene, selection, setSelection }: Prop
     if (!a) return null;
     return <ACProps a={a} scene={scene} setScene={setScene} setSelection={setSelection} />;
   }
+  if (selection.type === "stl") {
+    const s = scene.geometry.stl.find((x) => x.id === selection.id);
+    if (!s) return null;
+    return <STLProps s={s} scene={scene} setScene={setScene} setSelection={setSelection} />;
+  }
   return null;
+}
+
+/* ── STL transform props ─────────────────────────────────────────────── */
+function STLProps({
+  s, scene, setScene, setSelection,
+}: {
+  s: STLObject; scene: Scene; setScene: (s: Scene) => void;
+  setSelection: (s: Selection) => void;
+}) {
+  const update = (patch: Partial<STLObject>) => {
+    setScene({
+      ...scene,
+      geometry: {
+        ...scene.geometry,
+        stl: scene.geometry.stl.map((x) => x.id === s.id ? { ...x, ...patch } : x),
+      },
+    });
+  };
+  const del = () => {
+    setScene({
+      ...scene,
+      geometry: {
+        ...scene.geometry,
+        stl: scene.geometry.stl.filter((x) => x.id !== s.id),
+      },
+    });
+    setSelection({ id: null, type: null });
+  };
+  return (
+    <PanelShell title={`STL · ${s.name || "imported mesh"}`} onDelete={del}>
+      <p className="text-[8.5px] italic text-[var(--color-ink-7)]">
+        {s.triCount.toLocaleString()} triangles
+      </p>
+      <Divider label="Position" />
+      <Field label="X m"  step={0.1} min={-scene.geometry.L} max={scene.geometry.L}
+             value={s.x} onChange={(v) => update({ x: v })} />
+      <Field label="Y m"  step={0.1} min={0} max={scene.geometry.H}
+             value={s.y} onChange={(v) => update({ y: v })} />
+      <Field label="Z m"  step={0.1} min={-scene.geometry.W} max={scene.geometry.W}
+             value={s.z} onChange={(v) => update({ z: v })} />
+      <Divider label="Transform" />
+      <Field label="Scale"   step={0.05} min={0.01} max={10}
+             value={s.scale} onChange={(v) => update({ scale: v })} />
+      <Field label="Rot Y °" step={5} min={-180} max={180}
+             value={s.ry_deg ?? 0} onChange={(v) => update({ ry_deg: v })} />
+      <Field label="Rot X °" step={5} min={-180} max={180}
+             value={s.rx_deg ?? 0} onChange={(v) => update({ rx_deg: v })} />
+      <Field label="Rot Z °" step={5} min={-180} max={180}
+             value={s.rz_deg ?? 0} onChange={(v) => update({ rz_deg: v })} />
+    </PanelShell>
+  );
 }
 
 /* ── AC unit props ───────────────────────────────────────────────────── */
@@ -67,6 +123,10 @@ function ACProps({
         value={a.wall === "S" || a.wall === "N" ? a.x : a.z}
         onChange={(v) => update(a.wall === "S" || a.wall === "N" ? { x: v } : { z: v })}
       />
+      <Field label="Mount Y m" step={0.1} min={0.5} max={Math.max(0.6, scene.geometry.H - 0.05)}
+        value={a.mounting_height_m ?? +(scene.geometry.H * 0.88).toFixed(2)}
+        onChange={(v) => update({ mounting_height_m: v })}
+      />
       <Divider label="Capacity" />
       <Field label="kW" step={0.1} min={0.5} max={10}
              value={a.kw} onChange={(v) => update({ kw: v, capacity_tr: +(v / 3.517).toFixed(2) })} />
@@ -92,6 +152,41 @@ function ACProps({
       <Field label="CFM" step={25} min={50} max={1500}
              value={a.flow_rate_cfm ?? 350}
              onChange={(v) => update({ flow_rate_cfm: v })} />
+      <Divider label="Supply" />
+      <Field label="Set Temp °C" step={0.5} min={8} max={26}
+             value={a.supply_temp_C ?? 14}
+             onChange={(v) => update({ supply_temp_C: v })} />
+      <Field label="Pitch °" step={1} min={-30} max={20}
+             value={a.vertical_angle_deg ?? -10}
+             onChange={(v) => update({ vertical_angle_deg: v })} />
+      <Divider label="Swing (oscillation)" />
+      <SelectField
+        label="H. swing" value={a.swing_horizontal ? "on" : "off"}
+        options={[{ id: "off", label: "Off" }, { id: "on", label: "On" }]}
+        onChange={(v) => update({ swing_horizontal: v === "on" })}
+      />
+      <SelectField
+        label="V. swing" value={a.swing_vertical ? "on" : "off"}
+        options={[{ id: "off", label: "Off" }, { id: "on", label: "On" }]}
+        onChange={(v) => update({ swing_vertical: v === "on" })}
+      />
+      {(a.swing_horizontal || a.swing_vertical) && (
+        <>
+          <Field label="Period s" step={0.5} min={2} max={20}
+                 value={a.swing_period_s ?? 6}
+                 onChange={(v) => update({ swing_period_s: v })} />
+          {a.swing_horizontal && (
+            <Field label="H. amp °" step={5} min={5} max={60}
+                   value={a.swing_h_amp_deg ?? 30}
+                   onChange={(v) => update({ swing_h_amp_deg: v })} />
+          )}
+          {a.swing_vertical && (
+            <Field label="V. amp °" step={5} min={5} max={45}
+                   value={a.swing_v_amp_deg ?? 20}
+                   onChange={(v) => update({ swing_v_amp_deg: v })} />
+          )}
+        </>
+      )}
       <Divider label="State" />
       <SelectField
         label="On" value={a.on === false ? "off" : "on"}

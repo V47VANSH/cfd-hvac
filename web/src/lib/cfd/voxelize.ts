@@ -9,6 +9,7 @@
 
 import { NX, NY, NZ, K, type GridFields, type RoomDims, cellSize } from "./grid";
 import type { Obstacle, ExtensionBlock, STLObject } from "@/lib/io/schema";
+import { computeRoomMask } from "@/lib/geometry/roomMask";
 
 export function voxelizeObstacles(
   fields: GridFields,
@@ -99,6 +100,16 @@ export function voxelizeSTL(
   const { dx, dy, dz } = cellSize(room);
   for (const s of stls) {
     if (!s.positions || s.positions.length === 0) continue;
+    // Room STLs: stamp shell + flood-fill outside, so the legacy CFD
+    // also restricts itself to the actual L-shape (used by the
+    // optimizer's internal sim).
+    if (s.role === "room") {
+      const mask = computeRoomMask({ NX, NY, NZ, L: room.L, W: room.W, H: room.H }, s);
+      for (let k = 0; k < NX * NY * NZ; k++) {
+        if (mask[k] === 0) fields.wall[k] = 1;
+      }
+      continue;
+    }
     const sc = s.scale || 1;
     let minX = +Infinity, maxX = -Infinity;
     let minY = +Infinity, maxY = -Infinity;

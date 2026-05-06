@@ -95,7 +95,16 @@ export function buildACUnit(geo: Geometry, ac: ACUnit): THREE.Group {
 
   // Position + orient on the wall
   g.rotation.y = inwardYaw(ac.wall);
-  g.position.set(ac.x, geo.H * MOUNT_Y_FRAC, ac.z);
+  // Mounting height: explicit value if the user set one, otherwise the
+  // legacy default (88% of room height — typical split AC mount).
+  const mountY = ac.mounting_height_m ?? geo.H * MOUNT_Y_FRAC;
+  g.position.set(ac.x, mountY, ac.z);
   g.userData = { isAC: true, acid: ac.id };
   return g;
+}
+
+/** Default AC mounting height in metres. Exposed so the property panel
+ *  and worker can compute the same fallback. */
+export function defaultMountY(roomH: number): number {
+  return roomH * MOUNT_Y_FRAC;
 }

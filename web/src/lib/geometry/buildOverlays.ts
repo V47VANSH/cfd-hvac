@@ -8,10 +8,14 @@
 
 import * as THREE from "three";
 import { NX, NY, NZ, K } from "@/lib/cfd/grid";
-import { tempRGB, speedRGB, T_MIN, T_MAX, SPEED_MAX } from "@/lib/cfd/colormap";
+import { tempRGB, speedRGB, pmvRGB, ppdRGB, drRGB, T_MIN, T_MAX, SPEED_MAX } from "@/lib/cfd/colormap";
+import { type ComfortContext, pmvAt, ppdAt, drAt } from "@/lib/comfort";
 import type { Geometry } from "@/lib/io/schema";
 
-export type SimView = "both" | "flow" | "therm";
+export type SimView = "both" | "flow" | "therm" | "pmv" | "ppd" | "dr";
+
+export const COMFORT_VIEWS: ReadonlyArray<SimView> = ["pmv", "ppd", "dr"];
+export const isComfortView = (v: SimView): boolean => COMFORT_VIEWS.includes(v);
 
 interface OverlayTex {
   tex: THREE.CanvasTexture;
@@ -28,8 +32,34 @@ export interface Overlays {
   ceilTex:     OverlayTex;
   wallTex:     Record<"S" | "N" | "E" | "W", OverlayTex>;
   setOpacity(view: SimView, simRunning: boolean): void;
-  update(snap: { T: Float32Array; Vx: Float32Array; Vy: Float32Array; Vz: Float32Array }, view: SimView): void;
+  update(
+    snap: { T: Float32Array; Vx: Float32Array; Vy: Float32Array; Vz: Float32Array },
+    view: SimView,
+    comfortCtx?: ComfortContext,
+  ): void;
   dispose(): void;
+}
+
+/** Pick the RGB triple for a given cell under the active view. */
+function cellRGB(
+  view: SimView,
+  T: Float32Array, Vx: Float32Array, Vy: Float32Array, Vz: Float32Array,
+  k: number,
+  ctx: ComfortContext | undefined,
+): [number, number, number] {
+  const ux = Vx[k], uy = Vy[k], uz = Vz[k];
+  const v = Math.sqrt(ux * ux + uy * uy + uz * uz);
+  if (view === "pmv" || view === "ppd" || view === "dr") {
+    if (!ctx) return [80, 80, 80]; // grey if no context
+    const ta = T[k];
+    if (view === "pmv") return pmvRGB(pmvAt(ta, v, ctx));
+    if (view === "ppd") return ppdRGB(ppdAt(ta, v, ctx));
+    return drRGB(drAt(ta, v, ctx));
+  }
+  const showTherm = view === "both" || view === "therm";
+  return showTherm
+    ? tempRGB((T[k] - T_MIN) / (T_MAX - T_MIN))
+    : speedRGB(v / SPEED_MAX);
 }
 
 function mkTex(w: number, h: number): OverlayTex {
@@ -118,9 +148,9 @@ export function buildOverlays(geo: Geometry): Overlays {
   function update(
     snap: { T: Float32Array; Vx: Float32Array; Vy: Float32Array; Vz: Float32Array },
     view: SimView,
+    ctx?: ComfortContext,
   ) {
     const { T, Vx, Vy, Vz } = snap;
-    const showTherm = view === "both" || view === "therm";
 
     // Floor (iy = 0)
     {
@@ -128,10 +158,7 @@ export function buildOverlays(geo: Geometry): Overlays {
       for (let iz = 0; iz < NZ; iz++)
         for (let ix = 0; ix < NX; ix++) {
           const k = K(ix, 0, iz);
-          const rgb = showTherm
-            ? tempRGB((T[k] - T_MIN) / (T_MAX - T_MIN))
-            : speedRGB(Math.sqrt(Vx[k]**2 + Vy[k]**2 + Vz[k]**2) / SPEED_MAX);
-          pixel(img.data, (iz * NX + ix) * 4, rgb, 215);
+          pixel(img.data, (iz * NX + ix) * 4, cellRGB(view, T, Vx, Vy, Vz, k, ctx), 215);
         }
       floorTex.ctx.putImageData(img, 0, 0);
       floorTex.tex.needsUpdate = true;
@@ -142,10 +169,7 @@ export function buildOverlays(geo: Geometry): Overlays {
       for (let iz = 0; iz < NZ; iz++)
         for (let ix = 0; ix < NX; ix++) {
           const k = K(ix, NY - 1, iz);
-          const rgb = showTherm
-            ? tempRGB((T[k] - T_MIN) / (T_MAX - T_MIN))
-            : speedRGB(Math.sqrt(Vx[k]**2 + Vy[k]**2 + Vz[k]**2) / SPEED_MAX);
-          pixel(img.data, (iz * NX + ix) * 4, rgb, 160);
+          pixel(img.data, (iz * NX + ix) * 4, cellRGB(view, T, Vx, Vy, Vz, k, ctx), 160);
         }
       ceilTex.ctx.putImageData(img, 0, 0);
       ceilTex.tex.needsUpdate = true;
@@ -158,10 +182,7 @@ export function buildOverlays(geo: Geometry): Overlays {
       for (let iy = 0; iy < NY; iy++)
         for (let ix = 0; ix < NX; ix++) {
           const k = K(ix, iy, iz);
-          const rgb = showTherm
-            ? tempRGB((T[k] - T_MIN) / (T_MAX - T_MIN))
-            : speedRGB(Math.sqrt(Vx[k]**2 + Vy[k]**2 + Vz[k]**2) / SPEED_MAX);
-          pixel(img.data, ((NY - 1 - iy) * NX + ix) * 4, rgb, 185);
+          pixel(img.data, ((NY - 1 - iy) * NX + ix) * 4, cellRGB(view, T, Vx, Vy, Vz, k, ctx), 185);
         }
       t.ctx.putImageData(img, 0, 0);
       t.tex.needsUpdate = true;
@@ -174,10 +195,7 @@ export function buildOverlays(geo: Geometry): Overlays {
       for (let iy = 0; iy < NY; iy++)
         for (let iz = 0; iz < NZ; iz++) {
           const k = K(ix, iy, iz);
-          const rgb = showTherm
-            ? tempRGB((T[k] - T_MIN) / (T_MAX - T_MIN))
-            : speedRGB(Math.sqrt(Vx[k]**2 + Vy[k]**2 + Vz[k]**2) / SPEED_MAX);
-          pixel(img.data, ((NY - 1 - iy) * NZ + iz) * 4, rgb, 185);
+          pixel(img.data, ((NY - 1 - iy) * NZ + iz) * 4, cellRGB(view, T, Vx, Vy, Vz, k, ctx), 185);
         }
       t.ctx.putImageData(img, 0, 0);
       t.tex.needsUpdate = true;
@@ -192,7 +210,8 @@ export function buildOverlays(geo: Geometry): Overlays {
         (wallMeshes[w].material as THREE.MeshBasicMaterial).opacity = 0;
       return;
     }
-    const showTherm = view === "both" || view === "therm";
+    const isComfort = isComfortView(view);
+    const showTherm = view === "both" || view === "therm" || isComfort;
     const showFlow  = view === "both" || view === "flow";
     (floorMesh.material as THREE.MeshBasicMaterial).opacity =
       showTherm ? 0.88 : showFlow ? 0.62 : 0;

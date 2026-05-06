@@ -1,0 +1,26 @@
+services:
+  tier2:
+    build: .
+    image: cfd-server:0.1
+    container_name: cfd-tier2
+    ports:
+      - "8000:8000"
+    volumes:
+      - cfd_cases:/tmp/cfd-cases
+      # Mount the web/public folder so calibration.json + surrogate.json
+      # written by the backend land in the frontend's static assets and
+      # are served by the dev/prod Tier-1 build.
+      - ../web/public:/app/web_public
+    environment:
+      - CFD_CASE_ROOT=/tmp/cfd-cases
+      - LOG_LEVEL=info
+    restart: unless-stopped
+    healthcheck:
+      test: ["CMD", "curl", "-f", "http://localhost:8000/health"]
+      interval: 30s
+      timeout: 5s
+      retries: 3
+      start_period: 30s
+
+volumes:
+  cfd_cases:

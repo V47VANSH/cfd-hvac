@@ -1,0 +1,11 @@
+{
+  "name": "HVAC CFD Optimizer",
+  "short_name": "CFD HVAC",
+  "description": "Browser-based hybrid CFD + comfort + multi-AC optimization for HVAC decisions.",
+  "start_url": "/",
+  "display": "standalone",
+  "background_color": "#040710",
+  "theme_color": "#0c2040",
+  "orientation": "any",
+  "icons": []
+}

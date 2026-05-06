@@ -66,10 +66,28 @@ export function calcHeatLoad(scene: Scene): HeatLoad {
   const A_glass_default = Math.max(0, A_glass - A_glass_explicit);
   const Q_glass = Q_glass_explicit + U_DEFAULT.glass * A_glass_default * dT;
 
+  // Per-wall U-values from the optional material library. The simplified
+  // ASHRAE calc treats the four walls as a single area, so we use a
+  // weighted average if any wall-specific U-values are set.
+  const mat = scene.materials;
+  const wallU = (() => {
+    if (!mat?.wall_u_values) return U_DEFAULT.wall;
+    const u = mat.wall_u_values;
+    // Weight each wall by its full area (L·H or W·H).
+    const aS = L * H, aN = L * H, aE = W * H, aW = W * H;
+    const sum =
+        (u.S ?? U_DEFAULT.wall) * aS +
+        (u.N ?? U_DEFAULT.wall) * aN +
+        (u.E ?? U_DEFAULT.wall) * aE +
+        (u.W ?? U_DEFAULT.wall) * aW;
+    return sum / (aS + aN + aE + aW);
+  })();
+  const roofU = mat?.roof_u_value ?? U_DEFAULT.roof;
+
   const A_walls = 2*(L*H) + 2*(W*H) - A_glass;
   const A_roof  = L * W;
-  const Q_walls = U_DEFAULT.wall * A_walls * dT;
-  const Q_roof  = U_DEFAULT.roof * A_roof * dT;
+  const Q_walls = wallU * A_walls * dT;
+  const Q_roof  = roofU * A_roof * dT;
 
   // Occupants
   const occupants = scene.obstacles.filter(

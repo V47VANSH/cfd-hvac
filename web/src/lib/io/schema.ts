@@ -41,6 +41,19 @@ export interface STLObject {
   triCount: number;
   /** raw model-space vertices (Float32Array stored separately, not in JSON) */
   positions?: Float32Array;
+  /**
+   * "room"     — this STL is the actual room boundary; the cuboidal default
+   *              walls are hidden and the simulation domain becomes the STL.
+   * "obstacle" — this STL is an interior object (default). Multiple "obstacle"
+   *              STLs are allowed; only one "room" STL makes sense per scene.
+   */
+  role?: "room" | "obstacle";
+  /**
+   * Bounding box of the *raw* (un-transformed) STL vertices. Cached at
+   * import time so the room-fit logic doesn't re-scan the position array.
+   * In model space (i.e. before scale / rotation / translation).
+   */
+  bbox?: { minX: number; maxX: number; minY: number; maxY: number; minZ: number; maxZ: number };
 }
 
 export interface Opening {
@@ -79,6 +92,29 @@ export interface Environment {
   clo: number;           // clothing
   tariff_per_kwh: number;
   co2_per_kwh_kg: number;
+  /** Per-city annual cooling-degree-hours (overrides the default in the energy module). */
+  cooling_degree_hours?: number;
+  /** Coefficient of performance of the AC, cooling out / electrical in. */
+  cop?: number;
+  /** Climate preset key (UI hint, doesn't affect calculations). */
+  climate_preset?: string;
+}
+
+/**
+ * Material library — per-wall and per-roof U-values, picked from a
+ * preset by the user or specified per-wall manually. Optional; if absent,
+ * the ASHRAE module falls back to its global defaults
+ * (wall 2.8 W/m²K, glass 5.8, roof 2.0).
+ */
+export interface MaterialLibrary {
+  /** Active preset name (UI hint). */
+  preset?: string;
+  /** Per-wall U-values, W/m²K. Missing entries fall back to default. */
+  wall_u_values?: Partial<Record<Wall, number>>;
+  /** Roof / ceiling U-value, W/m²K. */
+  roof_u_value?: number;
+  /** Floor U-value (slab on ground typically much lower). */
+  floor_u_value?: number;
 }
 
 export interface Constraints {
@@ -106,12 +142,44 @@ export interface ACUnit {
   id: number;
   wall: Wall;
   x: number; z: number;
+  /**
+   * Mounting height of the AC unit centre, metres above floor. Default
+   * 1.8 m for a typical split AC mounted high on the wall, but for STL
+   * rooms with non-standard heights or for cassette / window units the
+   * user adjusts this in the AC config panel. Used by:
+   *   • the 3D mesh builder to position the AC body
+   *   • the CFD source injector (jet centre line is at this Y)
+   *   • the optimizer (jet placement uses this Y)
+   */
+  mounting_height_m?: number;
   kw: number;
   capacity_tr?: number;
   type?: "split" | "window" | "cassette";
   throw_distance_m?: number;
   airflow_angle_deg?: number;
   flow_rate_cfm?: number;
+  /**
+   * Supply-air temperature, °C. The temperature of the air the AC blows
+   * into the room. Default 14 °C — a typical split-AC supply at full
+   * cooling. Lower = colder supply = stronger cooling. Distinct from
+   * `environment.setpoint_C`, which is the comfort target used by the
+   * heat-load calc and the optimizer's score.
+   */
+  supply_temp_C?: number;
+  /** Vertical (pitch) angle of the louvres, degrees. Negative = downward.
+   *  Default −10 (typical split-AC angle aimed slightly toward the floor).
+   *  Used as the centre angle of vertical swing when `swing_vertical` is on. */
+  vertical_angle_deg?: number;
+  /** Horizontal swing (yaw oscillation) on/off. */
+  swing_horizontal?: boolean;
+  /** Vertical swing (pitch oscillation) on/off. */
+  swing_vertical?: boolean;
+  /** Swing period in seconds (one full back-and-forth). Typical AC ≈ 6 s. */
+  swing_period_s?: number;
+  /** Horizontal swing amplitude in degrees (peak yaw deviation). Default ±30°. */
+  swing_h_amp_deg?: number;
+  /** Vertical swing amplitude in degrees (peak pitch deviation). Default ±20°. */
+  swing_v_amp_deg?: number;
   on: boolean;
 }
 
@@ -125,6 +193,8 @@ export interface Scene {
   environment: Environment;
   constraints: Constraints;
   ac_units: ACUnit[];
+  /** Optional material library — per-wall U-values, picked via the Material panel. */
+  materials?: MaterialLibrary;
   /** sha256 of the canonicalized scene; filled by exporter */
   results_cache_key?: string;
 }

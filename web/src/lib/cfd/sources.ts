@@ -224,15 +224,19 @@ export function injectInfiltration(
 }
 
 // ── Small box of cold air around AC supply (re-applied each substep) ──
+//
+// Each unit's `supply_temp_C` (defaults to 14 °C) sets the floor of the
+// cold patch around its outlet. Lower supply temperature = stronger local
+// cooling; the rest of the room mixes via advection.
 export function setACCold(
   fields: GridFields,
   room: RoomDims,
-  acUnits: { x: number; z: number }[],
+  acUnits: { x: number; z: number; supply_temp_C?: number }[],
 ): void {
   const { L, W, H } = room;
   const { dx, dy, dz } = cellSize(room);
-  const T_AC = 16;
   for (const ac of acUnits) {
+    const Tsupply = ac.supply_temp_C ?? 14;
     const acIX = Math.round((ac.x + L / 2) / dx);
     const acIZ = Math.round((ac.z + W / 2) / dz);
     const acIY = Math.round(H * 0.88 / dy);
@@ -243,7 +247,7 @@ export function setACCold(
           const ij = Math.max(0, Math.min(NY - 1, acIY + diy));
           const ik = Math.max(0, Math.min(NZ - 1, acIZ + diz));
           const r = Math.sqrt(dix*dix + diy*diy + diz*diz) + 0.001;
-          fields.T[K(ii, ij, ik)] = Math.min(fields.T[K(ii, ij, ik)], T_AC + r * 2);
+          fields.T[K(ii, ij, ik)] = Math.min(fields.T[K(ii, ij, ik)], Tsupply + r * 2);
         }
   }
 }

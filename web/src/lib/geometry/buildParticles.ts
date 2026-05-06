@@ -9,6 +9,7 @@
 import * as THREE from "three";
 import { NX, NY, NZ, K } from "@/lib/cfd/grid";
 import { tempRGB, speedRGB, T_MIN, T_MAX, SPEED_MAX } from "@/lib/cfd/colormap";
+import type { SimView } from "@/lib/geometry/buildOverlays";
 import type { Geometry, Obstacle } from "@/lib/io/schema";
 
 const NP = 800;
@@ -21,7 +22,7 @@ export interface Particles {
     geo: Geometry,
     obstacles: Obstacle[],
     snap: { T: Float32Array; Vx: Float32Array; Vy: Float32Array; Vz: Float32Array },
-    view: "both" | "flow" | "therm",
+    view: SimView,
     ac: { x: number; z: number; wall: "S"|"N"|"E"|"W" }[],
   ): void;
   setVisible(v: boolean): void;
@@ -68,12 +69,14 @@ export function buildParticles(): Particles {
     room: Geometry,
     obstacles: Obstacle[],
     snap: { T: Float32Array; Vx: Float32Array; Vy: Float32Array; Vz: Float32Array },
-    view: "both" | "flow" | "therm",
+    view: SimView,
     ac: { x: number; z: number; wall: "S"|"N"|"E"|"W" }[],
   ) {
     const { L, W, H } = room;
     const dx = L / NX, dy = H / NY, dz = W / NZ;
-    const showTherm = view === "both" || view === "therm";
+    // Particles are hidden in comfort views; when visible, color by temperature
+    // unless we're in pure-airflow view.
+    const showTherm = view !== "flow";
     const sc = 1.25;
 
     for (let p = 0; p < NP; p++) {

@@ -1,7 +1,7 @@
 "use client";
 
 import { useEffect, useRef, useState } from "react";
-import { createCFDClient, type CFDClient, type CFDSnapshot } from "./workerClient";
+import { createCFDClient, type CFDClient, type CFDSnapshot, type CFDBackend } from "./workerClient";
 import type { Scene } from "@/lib/io/schema";
 import type { FieldMetrics } from "./solver";
 
@@ -21,6 +21,8 @@ export function useCFDSim() {
   const [metrics, setMetrics] = useState<FieldMetrics | null>(null);
   const [simStep, setSimStep] = useState(0);
   const [simRunning, setSimRunning] = useState(false);
+  const [elapsedS, setElapsedS] = useState(0);
+  const [durationS, setDurationS] = useState(300);
 
   useEffect(() => {
     const client = createCFDClient();
@@ -28,22 +30,32 @@ export function useCFDSim() {
       snapshotRef.current = snap;
       setMetrics(snap.metrics);
       setSimStep(snap.step);
+      setElapsedS(snap.elapsedS);
+      if (snap.durationS > 0) setDurationS(snap.durationS);
       for (const cb of subsRef.current) cb(snap);
     });
-    client.onDone((step) => {
+    client.onDone((step, elapsed) => {
       setSimRunning(false);
       setSimStep(step);
+      setElapsedS(elapsed);
     });
     clientRef.current = client;
     return () => { client.dispose(); clientRef.current = null; };
   }, []);
 
-  function start(scene: Scene, ac: { x: number; z: number; wall: "S"|"N"|"E"|"W" }[]) {
+  function start(
+    scene: Scene,
+    ac: { x: number; z: number; wall: "S"|"N"|"E"|"W" }[],
+    backend: CFDBackend = "mac",
+    duration = durationS,
+  ) {
     const c = clientRef.current; if (!c) return;
-    c.init(scene, ac);
+    c.init(scene, ac, backend, duration);
     c.start();
     setSimRunning(true);
     setSimStep(0);
+    setElapsedS(0);
+    setDurationS(duration);
   }
   function stop() {
     clientRef.current?.stop();
@@ -54,6 +66,11 @@ export function useCFDSim() {
     snapshotRef.current = null;
     setMetrics(null);
     setSimStep(0);
+    setElapsedS(0);
+  }
+  function setDuration(d: number) {
+    setDurationS(d);
+    clientRef.current?.setDuration(d);
   }
   function subscribe(cb: (s: CFDSnapshot) => void): () => void {
     subsRef.current.add(cb);
@@ -62,7 +79,8 @@ export function useCFDSim() {
 
   return {
     metrics, simStep, simRunning,
-    start, stop, reset, subscribe,
+    elapsedS, durationS,
+    start, stop, reset, setDuration, subscribe,
     snapshotRef,
   };
 }

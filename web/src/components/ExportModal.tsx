@@ -55,7 +55,7 @@ function hydrateScene(raw: unknown): Scene {
       return stl as Scene["geometry"]["stl"][number];
     }) as Scene["geometry"]["stl"];
   }
-  return normaliseLoadedScene(s as Scene);
+  return s as Scene;
 }
 
 function normaliseLoadedScene(s: Scene): Scene {
